@@ -83,9 +83,9 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
 | `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
-| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model row (saved by `every_second()`), the Tape drive (`.tap` names only, for now), status rows, console `k`/`K`/`T`/`N` |
+| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model row, the Tape drive (`.tap` names only, for now), status rows, console `k`/`K`/`T`/`N` |
 | `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
-| `main/rom_store.c` | The ROMs: `oric_roms` mapped once at power-on, the SD card's `oric/roms` over it |
+| `main/rom_store.c` | The ROMs: a slot of `oric_roms` (mapped, copied, unmapped), the SD card's `oric/roms` over it |
 | `main/settings.c` | NVS `oric`: the model |
 | `docs/oric-hardware.md` | The hardware research: memory map, VIA, AY, ULA and display, keyboard and NMI, cassette and TAP, Microdisc and MFM_DISK, reset; sources |
 | `roms/` | The ROMs (not in git; `roms/README.md` says where they come from) |
@@ -225,16 +225,14 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - **CAPS is a mask, not a flag**: $020C is $FF with CAPS on, $7F off (ANDed
   onto the key table's bit 7, the small letters: ROM $F50C). Taken as
   "non-zero = on", typed capitals came out small with CAPS off.
-- **The setup screen while running is on a PSRAM stack: no flash work
-  there** (the Tab5 rebooted twice, 2026-11-19): esp32emu's supervisor runs
-  it (and `set()`, and `start()` on a Restart) with its stack in PSRAM, and
-  anything that turns the caches off asserts there
-  (`esp_task_stack_is_sane_cache_disabled()`): `settings_save()`'s NVS
-  write from `set()`, and `esp_partition_mmap()` of the Oric-1's ROM slot,
-  never mapped before. The model is saved by `every_second()` (the stats
-  task, internal stack); the ROM partition is mapped once in
-  `reserve_memory()` (the main task) and kept. The siblings' `set()`s write
-  NVS directly: esp32emu's CLAUDE.md, To do.
+- **The setup screen while running rebooted the Tab5** (twice,
+  2026-11-19): esp32emu's supervisor showed it with its stack in PSRAM,
+  where turning the caches off asserts (`esp_task_stack_is_sane_cache_disabled()`):
+  the Model row's NVS write in `set()`, then `esp_partition_mmap()` of the
+  Oric-1's ROM slot on the Restart. Fixed in esp32emu the same day (the
+  main task shows the setup screen; its lessons); the Oric's own
+  workarounds (a deferred save, the partition mapped once) went again, and
+  its Model row with Restart is the check.
 - **A typed key and its SHIFT together can miss each other**: the ROM's
   full scan takes ~4.5 ms, columns 7 down to 0; a key in column 2 pressed
   after the scan passed the modifiers' column 4 is read unshifted (':'
@@ -275,7 +273,10 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   console (`T`), LIST and RUN; HIRES with PAPER 4, INK 3 and two CIRCLEs;
   `N` (TEXT again, the program kept); the Model switched three times with
   Restart (Atmos and Oric-1, "47870 BYTES FREE" and PRINT 3*3 from ROM slot
-  1), the choice still there after a reboot. 50 frames a second, 100%
+  1), the choice still there after a reboot; again with esp32emu's fix and
+  the workarounds gone (the save straight from `set()`): Model changes
+  with Restart and the volume changed while running, no reboot, the setup
+  screen using ~5.5 KB of the main task's 16 KB. 50 frames a second, 100%
   speed, core 1 16-17% busy, core 0 4-10%. Not checked: the sound on the
   speaker (by ear), Bluetooth and USB keyboards by hand, the MaTouch (not
   connected; its build is clean).

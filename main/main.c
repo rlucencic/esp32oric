@@ -33,7 +33,6 @@ static uint8_t *s_rom;
 static void reserve_memory(void)
 {
     settings_load();
-    rom_store_init();
     s_rom = heap_caps_malloc(ORIC_ROM_SIZE, MALLOC_CAP_SPIRAM);
     s_cfg.ram = heap_caps_malloc(ORIC_RAM_SIZE, MALLOC_CAP_SPIRAM);
 }
@@ -138,15 +137,7 @@ static void screen_mode(emu_screen_t *mode)
     mode->hz = ORIC_SCREEN_HZ;
 }
 
-/* ---- Setup screen choices ----
- *
- * Saved a moment later, by every_second() (the stats task): set() runs on
- * the supervisor's task while the machine runs, its stack in PSRAM, and an
- * NVS write there (a flash write: the caches off) asserts and reboots the
- * board (the Tab5, a Model tap, 2026-11-19).
- */
-
-static volatile bool s_save;
+/* ---- Setup screen choices ---- */
 
 static int model_get(void)
 {
@@ -157,14 +148,6 @@ static void model_set(int i)
 {
     if (i >= 0 && i <= 1) {
         settings.model = i;
-        s_save = true;
-    }
-}
-
-static void every_second(void)
-{
-    if (s_save) {
-        s_save = false;
         settings_save();
     }
 }
@@ -322,7 +305,6 @@ static const emu_machine_t machine = {
     .status = status,
     .console_info = console_info,
     .console_command = console_command,
-    .every_second = every_second,
 };
 
 void app_main(void)

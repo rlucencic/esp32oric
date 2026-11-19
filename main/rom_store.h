@@ -11,9 +11,6 @@
  */
 typedef enum { ROM_BASIC11, ROM_BASIC10, ROM_MICRODISC, ROM_COUNT } rom_id_t;
 
-/* At power-on, from a task whose stack is in internal RAM (reserve_memory()) */
-void rom_store_init(void);
-
 const char *rom_store_name(rom_id_t id);    /* "basic11b.rom" */
 uint32_t rom_store_size(rom_id_t id);       /* 16 KB, the Microdisc's 8 */
 

@@ -51,38 +51,26 @@ static bool plausible(rom_id_t id, const uint8_t *p)
     return false;
 }
 
-/* The partition, mapped once at power-on (rom_store_init(), from the main
- * task) and kept: reads through the mapping never touch the caches, but
- * making a mapping does (on the P4 it turns them off), and that asserts on
- * a task whose stack is in PSRAM: the setup screen's Restart runs start()
- * on the supervisor's (esp32emu), and the Oric-1's first mapping of slot 1
- * there rebooted the Tab5. Not esp_partition_read() either: it turns the
- * caches off while it reads (the LCD's refill stalls).
+/* Through a mapping, not esp_partition_read(): that turns the caches off
+ * while it reads, which stalls the LCD's refill (picture artefacts). (A
+ * first mapping of a region turns them off too, on the P4 at least: start()
+ * must run on a task whose stack is in internal RAM, as esp32emu's are.)
  */
-static const uint8_t *s_map;
-static uint32_t s_map_size;
-
-void rom_store_init(void)
+static bool from_partition(rom_id_t id, uint8_t *buf)
 {
     const esp_partition_t *part = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ROM_PARTITION_TYPE,
                                                            "oric_roms");
-    const void *map;
-    esp_partition_mmap_handle_t handle;
-    if (part == NULL || esp_partition_mmap(part, 0, part->size, ESP_PARTITION_MMAP_DATA, &map, &handle) != ESP_OK) {
-        ESP_LOGW(TAG, "no oric_roms partition: ROMs from the SD card only");
-        return;
-    }
-    s_map = map;
-    s_map_size = part->size;
-}
-
-static bool from_partition(rom_id_t id, uint8_t *buf)
-{
     uint32_t offset = id * SLOT, size = roms[id].size;
-    if (s_map == NULL || offset + size > s_map_size) {
+    if (part == NULL || offset + size > part->size) {
         return false;
     }
-    memcpy(buf, s_map + offset, size);
+    const void *map;
+    esp_partition_mmap_handle_t handle;
+    if (esp_partition_mmap(part, offset, size, ESP_PARTITION_MMAP_DATA, &map, &handle) != ESP_OK) {
+        return false;
+    }
+    memcpy(buf, map, size);
+    esp_partition_munmap(handle);
     return true;
 }
 
