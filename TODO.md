@@ -6,13 +6,13 @@ the hardware for each; the section numbers below are theirs. (The core to
 "Ready", the host build, the board side on the Tab5, tapes and the
 Microdisc: done 2026-11-19, CLAUDE.md.)
 
-1. **The board side's rest**: flash the MaTouch (its build is clean; it
-   wasn't connected on 2026-11-19) and check the prompt, typing, sound, a
-   tape (fast and real time), Sedoric from a disk (its boot, a SAVE: the
-   images in PSRAM, the writes to the card) and core 1's load there; the sound on both
-   boards' speakers by ear (PING, ZAP, a key click; only the host's
-   recordings were measured); a Bluetooth or USB keyboard by hand (CTRL,
-   FUNCT, Caps Lock as CTRL-T, the cursor keys, F12's NMI).
+1. **The board side's rest**: the sound on both boards' speakers by ear
+   (PING, ZAP, a key click; only the host's recordings were measured); a
+   Bluetooth or USB keyboard by hand (CTRL, FUNCT, Caps Lock as CTRL-T, the
+   cursor keys, F12's NMI). The MaTouch's reset loop, seen once
+   (CLAUDE.md, Testing): if it comes back, catch the reset reason (the
+   ROM's line at 115200 on the UART, or the panic on the native USB port;
+   esp32emu could log `esp_reset_reason()` at boot for every machine).
 2. **The web page in detail** (as the siblings' machine cards): system,
    ROM, memory (MAP, what the Microdisc pages in), the ULA's mode
    (text/hires, 50/60 Hz, screen address), the VIA (timers, IFR/IER,

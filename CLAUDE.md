@@ -10,8 +10,7 @@ required (esp32emu's plan). Both boards, as the Electron and the QL. The
 plan: esp32emu's CLAUDE.md, "To do" (the Oric Atmos's entry). **What's
 next: `TODO.md`**.
 
-**State (2026-11-19): runs on the Tab5; the MaTouch builds, not tried
-yet.** Done: the hardware research (`docs/oric-hardware.md`), the ROMs
+**State (2026-11-19): runs on the Tab5 and the MaTouch.** Done: the hardware research (`docs/oric-hardware.md`), the ROMs
 (local, not in git), the core (`components/oric`: BASIC 1.1 to "Ready",
 typing, text and hires with every attribute, the AY's sound, NMI, 50/60
 Hz; BASIC 1.0 for the Oric-1), its host build (`make -C
@@ -72,7 +71,14 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   read_mac` (in the IDF's environment) boots the app; ~10 s later the
   console answers.
 - The MaTouch: its UART port, not native USB (the speaker's lines); opening
-  that port resets the board.
+  that port resets the board, so a check is one session (a script on
+  `emu_console.py`'s `open_port()` and `screenshot()`: waits, console
+  commands, `L` screenshots in turn; wait ~15 s after opening). Its panics
+  print on the native USB port (`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG`), not
+  the UART: a reset loop leaves only the ROM's 115200-baud lines (garbage at
+  921600). Setup screen: Model y 193, Tape y 253, Microdisc y 313, Sound y
+  373, the rows' buttons at x 340 and 626, Start `t 850 532`. Both boards
+  call themselves `oric-atmos.local`: use their IPv4 addresses.
 - `../esp32emu/tools/emu_console.py PORT log N | lcd F.png | send "cmd" |
   info` with the IDF venv's Python (`-I`; `lcd` wants macOS's `sips`: on
   Linux a Pillow stand-in named `sips` first on PATH). Start on the setup
@@ -188,7 +194,10 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   through the callbacks, writes to $9800-$BFFF too (a changed byte sets
   `screen_touched` for two frames), writes to $C000-$FFFF to a sink page
   while BASIC is there (`oric_map_high()`: BASIC, or what the Microdisc
-  pages in; the tape's traps only with BASIC in). Power-on: noise with bit
+  pages in; the tape's traps only with BASIC in). The sound's ring (mono),
+  the drives' tables and the controller's buffer are in PSRAM
+  (`ORIC_SLOW_ALLOC`): the core keeps ~3 KB of internal RAM (see the
+  lessons). Power-on: noise with bit
   6 set in $0400-$FFFF (no stray attributes on the picture while the RAM
   test runs; the overlay RAM's for Sedoric), zeros in pages 0-3 (see the
   lessons); the ULA's mode 50 Hz text.
@@ -414,6 +423,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   began: lost data every time. Sedoric reads an address to find the head
   on another drive (DIR B), so drive B failed only in a new session
   (straight after INIT Sedoric had the directory in memory).
+- **The sound ring in internal RAM starved the MaTouch's web server**:
+  `psg.c`'s 32 KB stereo ring was static, in internal RAM; with the
+  Microdisc's tables the MaTouch had 22 KB free, 13.8 KB the largest
+  block, and a download (an 8 KB DMA buffer after the transfer task's
+  stack) answered "Out of memory". The ring mono in PSRAM, the disk tables
+  there too: 57 KB free, 31.7 KB the largest, 40 KB at the lowest.
 - **Write Track's data can't hold $F5-$F7**: they write an $A1 sync, a $C2
   and the CRC, as on a 1793. `mkdisk.py`'s first test pattern (i ^ $A5)
   had them from byte 80, and its sector read back with a CRC error; a
@@ -496,6 +511,20 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   works or the game runs, core 0 4-14%. Left on the card: a clean
   `sedoric3.dsk` and `demomagx.dsk` (the test disks deleted); the
   Microdisc switched off again.
+- **On the MaTouch** (2026-11-19, over its UART): the setup's rows (the
+  Microdisc's too), BASIC's "Ready", typed lines; Cobra at once (core 1
+  42-46%, core 0 10-14%); CSAVE onto a blank tape made by the web API (36
+  bytes to the card) and CLOAD of it in real time (the Tape row), LIST,
+  RUN, 50 frames a second; the Microdisc: `mkdisk.py`'s disk PASS, its
+  image downloaded back byte for byte the host's (after the internal RAM
+  fix: before it the download failed), Sedoric 3's boot (77 sectors, core
+  1 40-51% meanwhile), SAVE, NEW, LOAD, RUN, DIR at 100%. Once (the third
+  session) it reset ~3 s after every boot, just after WiFi connected, 18
+  times in 100 s, the internal RAM then 14 KB at its lowest; six sessions
+  since, with the same steps, booted once each. Not explained: the
+  panics go to the native USB port and no reset reason was caught. Left
+  on its card: `cobra.tap` (in the tape drive) and a clean
+  `sedoric3.dsk`; the Microdisc off.
 - **Tapes on the Tab5** (2026-11-19): the setup's Tape row (Fast / Real
   time, kept after a reflash); tapes uploaded through the web API; Cobra
   (4 files) at once and running; CSAVE onto a blank tape made by the API,

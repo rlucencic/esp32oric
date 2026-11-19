@@ -173,7 +173,7 @@ bool oric_init(const oric_config_t *config)
     oric.ram = config->ram;
     oric.rom = config->rom;
     oric.disk_rom = config->disk_rom;
-    if (!oric_video_init()) {
+    if (!oric_video_init() || !psg_init() || !fdc_init()) {
         return false;
     }
     const m6502_bus_t bus = { bus_read, bus_write, NULL, NULL };

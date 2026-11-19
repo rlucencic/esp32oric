@@ -53,7 +53,7 @@ static struct {
     int64_t dc_y;                       /* ... its output, 16 bits of fraction */
 } s;
 
-static int16_t s_ring[RING][2];
+static int16_t *s_ring;                 /* RING mono samples (PSRAM: the MaTouch's internal RAM is short) */
 static volatile uint32_t s_head, s_tail;
 
 static void env_restart(void)
@@ -63,6 +63,14 @@ static void env_restart(void)
     s.env_attack = (s.reg[13] & 0x04) != 0;
     s.env_holding = false;
     s.env_vol = s.env_attack ? 0 : 15;
+}
+
+bool psg_init(void)
+{
+    if (s_ring == NULL) {
+        s_ring = ORIC_SLOW_ALLOC(RING * sizeof(int16_t));
+    }
+    return s_ring != NULL;
 }
 
 void psg_reset(void)
@@ -203,11 +211,10 @@ void psg_line(void)
         int32_t y = (int32_t)(s.dc_y >> 16);
         int16_t v = y > 32767 ? 32767 : y < -32768 ? -32768 : (int16_t)y;
         uint32_t head = s_head;
-        if (head - s_tail >= RING) {
+        if (s_ring == NULL || head - s_tail >= RING) {
             continue;                   /* nobody drains it (the host without a WAV) */
         }
-        s_ring[head % RING][0] = v;
-        s_ring[head % RING][1] = v;
+        s_ring[head % RING] = v;
         s_head = head + 1;
     }
 }
@@ -226,8 +233,7 @@ int oric_audio_render(int16_t *dst, int frames)
         n = frames;
     }
     for (uint32_t i = 0; i < n; i++) {
-        dst[2 * i] = s_ring[(tail + i) % RING][0];
-        dst[2 * i + 1] = s_ring[(tail + i) % RING][1];
+        dst[2 * i] = dst[2 * i + 1] = s_ring[(tail + i) % RING];      /* mono: both sides */
     }
     s_tail = tail + n;
     return n;

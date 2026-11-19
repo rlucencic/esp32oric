@@ -88,6 +88,7 @@ void oric_video_line(int line);         /* decode a picture line (0-223) as it s
 void oric_video_frame_end(void);
 
 /* psg.c: the AY-3-8912 */
+bool psg_init(void);                    /* the sound's ring */
 void psg_reset(void);
 void psg_bus(bool bdir, bool bc1, uint8_t data);
 uint8_t psg_read(void);
@@ -126,6 +127,7 @@ bool fdc_intrq(void);
 bool fdc_drq(void);
 void fdc_select(int drive, int side);
 void fdc_frame_end(void);
+bool fdc_init(void);                    /* the drives' tables (PSRAM) */
 void fdc_reset(void);
 
 /* tape.c: the cassette */

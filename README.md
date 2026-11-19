@@ -15,7 +15,7 @@ their own get the tape in real time. The Microdisc (switched on in the
 setup screen) boots Sedoric and Oric DOS from `.DSK` (MFM_DISK) images in
 two drives through its own EPROM and a WD1793 that takes its real time;
 disks are written back in place, and blank ones are made from the web page
-for Sedoric's INIT. The MaTouch is built but not yet tried. The hardware research is in
+for Sedoric's INIT. Both boards run it at full speed. The hardware research is in
 `docs/oric-hardware.md`; `TODO.md` has the plan, in order; `CLAUDE.md` the
 state of things.
 

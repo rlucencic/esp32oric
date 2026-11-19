@@ -72,7 +72,7 @@ typedef struct {
 
 uint64_t fdc_event_at = UINT64_MAX;
 
-static drive_t s_drive[ORIC_DRIVES];
+static drive_t *s_drive;                /* ORIC_DRIVES of them, and the track's IDs: PSRAM (fdc_init()) */
 
 static struct {
     uint8_t status, command, track, sector, data;
@@ -106,7 +106,7 @@ static struct {
 static struct {
     const uint8_t *raw;                 /* the track parsed (NULL: none) */
     int count;
-    sector_id_t id[MAX_IDS];
+    sector_id_t *id;                    /* MAX_IDS */
 } s_trk;
 
 /* ---- CRC-CCITT, as the 1793's (preset to $FFFF before the $A1s) ---- */
@@ -681,7 +681,7 @@ static void command(uint8_t v, uint64_t now)
         return;
     }
     wd.type1 = false;
-    if (!ready() || wd.buf == NULL) {
+    if (!ready()) {
         finish(now, ST_NOT_READY);
         return;
     }
@@ -943,16 +943,33 @@ void fdc_frame_end(void)
     }
 }
 
+/* The tables in PSRAM (the MaTouch's internal RAM is short); the API's
+ * calls before the machine starts make them too
+ */
+bool fdc_init(void)
+{
+    if (s_drive == NULL) {
+        s_drive = ORIC_SLOW_ALLOC(ORIC_DRIVES * sizeof(drive_t));
+    }
+    if (s_trk.id == NULL) {
+        s_trk.id = ORIC_SLOW_ALLOC(MAX_IDS * sizeof(sector_id_t));
+    }
+    if (wd.buf == NULL) {
+        wd.buf = ORIC_SLOW_ALLOC(TRACK_STRIDE);
+    }
+    return s_drive != NULL && s_trk.id != NULL && wd.buf != NULL;
+}
+
 void fdc_reset(void)
 {
     uint8_t *buf = wd.buf;
     memset(&wd, 0, sizeof(wd));
-    wd.buf = buf ? buf : ORIC_SLOW_ALLOC(TRACK_STRIDE);
+    wd.buf = buf;
     wd.type1 = true;
     wd.dir = 1;
     fdc_event_at = UINT64_MAX;
     s_trk.raw = NULL;
-    for (int i = 0; i < ORIC_DRIVES; i++) {
+    for (int i = 0; s_drive != NULL && i < ORIC_DRIVES; i++) {
         s_drive[i].cyl = 0;             /* (the drives keep theirs on a real one: Restore finds 0) */
     }
 }
@@ -961,7 +978,7 @@ void fdc_reset(void)
 
 bool oric_disk_insert(int drive, const char *path)
 {
-    if (drive < 0 || drive >= ORIC_DRIVES) {
+    if (drive < 0 || drive >= ORIC_DRIVES || !fdc_init()) {
         return false;
     }
     oric_disk_eject(drive);
@@ -1051,6 +1068,9 @@ static bool flush_drive(drive_t *d)
 
 bool oric_disk_dirty(void)
 {
+    if (s_drive == NULL) {
+        return false;
+    }
     for (int i = 0; i < ORIC_DRIVES; i++) {
         if (s_drive[i].dirty) {
             return true;
@@ -1061,6 +1081,9 @@ bool oric_disk_dirty(void)
 
 void oric_disk_flush(void)
 {
+    if (s_drive == NULL) {
+        return;
+    }
     for (int i = 0; i < ORIC_DRIVES; i++) {
         flush_drive(&s_drive[i]);
     }
@@ -1068,7 +1091,7 @@ void oric_disk_flush(void)
 
 void oric_disk_eject(int drive)
 {
-    if (drive < 0 || drive >= ORIC_DRIVES) {
+    if (drive < 0 || drive >= ORIC_DRIVES || s_drive == NULL) {
         return;
     }
     drive_t *d = &s_drive[drive];
@@ -1084,7 +1107,7 @@ void oric_disk_eject(int drive)
 
 const char *oric_disk_path(int drive)
 {
-    if (drive < 0 || drive >= ORIC_DRIVES || !s_drive[drive].inserted) {
+    if (drive < 0 || drive >= ORIC_DRIVES || s_drive == NULL || !s_drive[drive].inserted) {
         return NULL;
     }
     return s_drive[drive].path;
@@ -1092,7 +1115,7 @@ const char *oric_disk_path(int drive)
 
 bool oric_disk_protected(int drive)
 {
-    return drive >= 0 && drive < ORIC_DRIVES && s_drive[drive].inserted && s_drive[drive].protect;
+    return drive >= 0 && drive < ORIC_DRIVES && s_drive != NULL && s_drive[drive].inserted && s_drive[drive].protect;
 }
 
 /* A blank disk: no track formatted (Sedoric's INIT, Oric DOS's FORMAT) */
@@ -1129,7 +1152,7 @@ bool oric_disk_create(const char *path, int sides, int tracks)
 void oric_disk_status(int drive, oric_disk_status_t *s)
 {
     memset(s, 0, sizeof(*s));
-    if (drive < 0 || drive >= ORIC_DRIVES) {
+    if (drive < 0 || drive >= ORIC_DRIVES || s_drive == NULL) {
         return;
     }
     const drive_t *d = &s_drive[drive];
