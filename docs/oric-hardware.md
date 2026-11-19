@@ -76,8 +76,8 @@ claims page 3 ($0314/$0318 exactly in MAME, $0310-$031B in the MiSTer
 model, $0310-$03FF in CLK); control register bit 2's meaning; MFM_DISK
 geometry type 2's exact layout; how a Sedoric disk satisfies the EPROM's
 boot lookup (not traced); why MAME puts $42 at RAM $E000 on reset (nothing
-in the EPROM reads it); the Atmos Manual's double-height example that
-contradicts the hardware rule. Single sources: the vertical counter
+in the EPROM reads it). (The Atmos Manual's double-height example, once
+listed here, agrees with the hardware rule: 4.8.) Single sources: the vertical counter
 stepping at the start of horizontal sync (ULARTL), PB5 unused (AUG),
 Oric DOS's 16 sectors per track (MDM), the MiSTer model's Microdisc
 address decoding.
@@ -186,6 +186,10 @@ then leaves $55 in every byte of $0400-$BFFF (it writes $AA, then $55)
 zero except $E000 = $42 (section 7.5); CLK fills RAM with random values
 with bit 6 set, so that no stray attribute (notably a 60 Hz one) appears
 [CLK `Oric.cpp` constructor comment]. Suggested: random with bit 6 set.
+But not in page 2: the ROM reads its key buffer $02DF (bit 7 = a new key)
+before it ever writes it, and noise there typed a phantom key after
+"Ready" in our first run (2026-11-19). The core keeps noise in
+$0400-$BFFF only and zeros elsewhere [derived].
 
 ### 1.6 What the emulator's map needs [derived]
 
@@ -507,8 +511,14 @@ remainder of the row"); ULARTL `rg_invert`; MAME; CLK] [confirmed].
 Sources: [MB2 p26 table; ULARTL `en_ink`/`en_attr`/`en_paper`/`en_mode`;
 AM p75 (ESC @ to ESC W, codes 0-23); MAME; CLK; MISTER] [confirmed]. So
 $18 = text 60 Hz, $1A = text 50 Hz, $1C = hires 60 Hz, $1E = hires 50 Hz
-[derived]. In hires the style bits are stored but do nothing on pixel
-lines [MB2 p27].
+[derived]. On hires pixel lines the alternate set and double height do
+nothing (they only choose a character pattern), but **flashing applies**:
+the RTL's `blink_pixel = (!rg_fcnt[4] || !rg_attr_blink) && rg_shift[5]`
+ignores the mode, and MB1 has the flash clock modulate the pixel stream
+after the shift register [ULARTL; MB1 "Attribute handling"] [confirmed].
+(These notes first said all three style bits do nothing there, after MB2
+p27; corrected 2026-11-19 from the RTL. MB2's PDF text can't be extracted
+here to recheck its wording.)
 
 Rules:
 
@@ -576,8 +586,11 @@ rows 0-3 (top halves) and odd rows 4-7 (bottom halves); text must start
 on an even row [MB1 ("even lines have the top half ... explains the bug
 where bottom halves of text appear above the top half"); ULARTL
 `vcnt[3:1]`; MAME; CLK; MISTER] [confirmed]. The Atmos Manual's example
-describes top halves on "line 1" [AM p76], which contradicts this; its
-line numbering is unclear [UNCERTAIN, no effect on the rule].
+puts the top halves on "line 1" [AM p76]: its lines count from below the
+status line, as PLOT's do (PLOT X,0 is screen row 1), and its line 10
+`PRINT CHR$(12)` ends with a newline, so the message lands on screen rows
+2 and 3. Run on the emulator with the rule above it shows right (checked
+2026-11-19): no contradiction [derived].
 
 **Flashing** (style bit 2): ink pixels are replaced by paper during the
 off half of the flash clock; inverse still applies. The flash clock is the

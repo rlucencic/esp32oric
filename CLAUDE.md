@@ -10,11 +10,12 @@ required (esp32emu's plan). Both boards, as the Electron and the QL. The
 plan: esp32emu's CLAUDE.md, "To do" (the Oric Atmos's entry). **What's
 next: `TODO.md`**.
 
-**State (2026-11-19): early. Nothing builds or runs yet.** Done: the
-hardware research (`docs/oric-hardware.md`, complete), the ROMs (local,
-not in git), the core's public API (`include/oric.h`), its internal state
-and module interfaces (`oric_internal.h`) and the 6522 (`via.c`, not yet
-compiled). Everything else is in `TODO.md`, in order.
+**State (2026-11-19): the core runs on the host; no board build yet.**
+Done: the hardware research (`docs/oric-hardware.md`), the ROMs (local,
+not in git), the core (`components/oric`: BASIC 1.1 to "Ready", typing,
+text and hires with every attribute, the AY's sound, NMI, 50/60 Hz; BASIC
+1.0 boots too) and its host build (`make -C components/oric/host run`,
+`check`). Next, the board side: `TODO.md`.
 
 The board side (tasks, LCD, touch, SD, WiFi, BLE, setup screen, web page,
 console) and the 6502 core (`m6502`) are the shared library in
@@ -34,7 +35,7 @@ certain and what is not).
 ## Build, flash, debug (the Linux PC)
 
 As esp32electron (copy its `CMakeLists.txt`, `sdkconfig.defaults`,
-`partitions.csv`, `main/` when they're written, `TODO.md` 3):
+`partitions.csv`, `main/` when they're written, `TODO.md` 1):
 
 ```sh
 # Tab5 (/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_60:55:F9:FB:03:03-if00)
@@ -66,10 +67,14 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | Path | What |
 |---|---|
 | `components/oric/include/oric.h` | The core's API: config (model, ROM, RAM), frame, picture lines, keys by matrix position (`ORIC_KEY_*`, row * 8 + column), typing, sound, status |
-| `components/oric/oric_internal.h` | The machine's state (`oric_t`: CPU, VIA, RAM, ROM, the frame's line, the ULA's mode register), the time constants (64-cycle lines, 312 / 264 lines, 224 picture lines), the interfaces of `video.c`, `psg.c`, `keyboard.c` (to be written) |
+| `components/oric/oric_internal.h` | The machine's state (`oric_t`: CPU, VIA, RAM, ROM, the frame's line, the ULA's mode register), the time constants (64-cycle lines, 312 / 264 lines, 224 picture lines), the modules' interfaces |
+| `components/oric/oric.c` | Init, reset (RAM noise, the mode register), the 6502's bus (page pointers; page 3 and $9800-$BFFF writes through callbacks), the VIA's wiring (the AY's bus, PB3, the printer's ACK, the IRQ), the frame loop, NMI, status |
 | `components/oric/via.c`, `via.h` | The 6522, from esp32cbm's (the 1541's; the user's own MIT code): ports with their control lines, timer 1 (one-shot / free running, PB7), timer 2, IFR/IER; timers lazy (`via_update()` counts up to the CPU's cycle; the CPU's run ends at the next underflow through `m6502_lower_until()`) |
-| `components/oric/host/` | The host build (empty: `TODO.md` 2) |
-| `main/` | The board side (empty: `TODO.md` 3) |
+| `components/oric/psg.c` | The AY-3-8912: registers through BDIR/BC1, port A (the keyboard's columns), tones, noise, envelope, the mono mix through a capacitor into the sound ring (31250 Hz) |
+| `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
+| `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
+| `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
+| `main/` | The board side (empty: `TODO.md` 1) |
 | `docs/oric-hardware.md` | The hardware research: memory map, VIA, AY, ULA and display, keyboard and NMI, cassette and TAP, Microdisc and MFM_DISK, reset; sources |
 | `roms/` | The ROMs (not in git; `roms/README.md` says where they come from) |
 
@@ -126,6 +131,101 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   $0314 status gating and page-3 decoding, MFM_DISK geometry type 2,
   Sedoric's boot lookup.
 
+## The core (`components/oric`), as written
+
+- **Time**: the 6502's 1 MHz cycles. A frame runs line by line
+  (`oric_run_frame()`): each picture line (0-223) is decoded as it starts,
+  then the CPU runs to the line's end, stopping at the VIA's timer
+  underflows (`run_to()`: `via_update()`, and `m6502_repoll()` when the
+  interrupt came before the instruction's poll cycle), then the AY's two
+  samples. After line 223's decode the mode register sets the frame's
+  length (312 or 264 lines: the last 50/60 attribute rules that same frame,
+  the RTL). NMI (`oric_nmi()`, any task) is taken as the next frame starts.
+- **Memory** (`oric.c`): RAM and the ROM through the 6502 core's page
+  pointers, flat at 1 MHz; page 3 the VIA (register = address & 15)
+  through the callbacks, writes to $9800-$BFFF too (a changed byte sets
+  `screen_touched` for two frames), writes to $C000-$FFFF to a sink page.
+  Power-on: noise with bit 6 set in $0400-$BFFF (no stray attributes on
+  the picture while the RAM test runs), zeros elsewhere (see the lessons);
+  the ULA's mode 50 Hz text.
+- **The VIA's wiring**: port A out to the AY's bus at every change of ORA,
+  DDRA or the PCR (`psg_bus(CB2, CA2, port A)`); port A in is the AY's
+  register in its read cycle; PB3 in is the keyboard's sense for the row
+  on PB0-2 and the columns low in the AY's port A; PB4's rising edge (the
+  printer's strobe) acknowledges at once on CA1 (no printer: LPRINT doesn't
+  hang); PB6 is the motor (status only so far); the IRQ is a level on the
+  6502's IRQ bit 0.
+- **The AY** (`psg.c`): registers masked to their bits, R13 restarts the
+  envelope, an address with its high nibble set deselects the chip (the
+  data sheet's mask); port A reads R14 while R7 bit 6 makes it an output,
+  else $FF. Sound in 8-clock steps: tone half-periods of TP steps, noise
+  and envelope every other step (17-bit LFSR, bit 0 ^ bit 3; 16 envelope
+  steps with continue/attack/alternate/hold), levels halving every two
+  steps (15 = 6000), three channels summed (mono, both sides), a DC
+  blocker (y kept with 16 fraction bits), two samples a line averaged over
+  their 32 clocks: 31250 Hz into a 8192-frame ring (`oric_audio_render()`).
+- **The ULA** (`video.c`): docs 4.10's model per line; a cell is 16 bits
+  (pattern 0-5, ink 6-8, paper 9-11, inverse 12, flash 13); flashing hides
+  the ink for 16 of 32 frames (the RTL's counter from 1) **on hires lines
+  too** (the RTL's `blink_pixel`; the notes had it otherwise, corrected).
+  Three frames of 224 x 40 cells (PSRAM on the boards); a decoded frame
+  that differs from the latest becomes the latest (`oric_screen_signature()`
+  moves, also when the flash phase turns over a frame with flashing
+  cells). A frame is not decoded at all while nothing in $9800-$BFFF
+  changed and its starting mode equals the last decoded one's (the mode it
+  leaves is then the recorded one). `oric_render_line_rgb565()`: 240
+  pixels, 3-bit RGB.
+- **The keyboard** (`keyboard.c`): `oric_key()` from any task (atomic bits
+  by row), typed text (`oric_type()`: a key held 3 frames, then 2 up; its
+  SHIFT or CTRL a frame before it; capitals plain while CAPS is on, with
+  SHIFT when off; small letters plain; control codes as CTRL + letter,
+  `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL).
+
+## Lessons (each one cost a debugging session)
+
+- **Page 2 noise typed a phantom key**: power-on RAM noise everywhere put
+  $E8 in $02DF, the key buffer (bit 7 = a new key): BASIC's first input
+  read an 'h' after "Ready". The ROM never clears it before reading.
+  Noise only where the RAM test goes ($0400-$BFFF).
+- **CAPS is a mask, not a flag**: $020C is $FF with CAPS on, $7F off (ANDed
+  onto the key table's bit 7, the small letters: ROM $F50C). Taken as
+  "non-zero = on", typed capitals came out small with CAPS off.
+- **A typed key and its SHIFT together can miss each other**: the ROM's
+  full scan takes ~4.5 ms, columns 7 down to 0; a key in column 2 pressed
+  after the scan passed the modifiers' column 4 is read unshifted (':'
+  came out ';'). The modifier now goes down a frame earlier.
+
+## Testing
+
+- **Host build**: `make -C components/oric/host run` (ROM `roms/
+  basic11b.rom`, 300 frames, `build/screen.ppm`), or `build/oric_host
+  <rom> [frames] [out.ppm]` (~0.1 ms a frame). Environment: `ORIC_MODEL=1`
+  (an Oric-1: give `basic10.rom`), `ORIC_TEXT=1` (the text screen as
+  characters at the end), `ORIC_TYPE=<frame>:<text>|...` (`\n` RETURN;
+  `oric_type()` drops text given while the last is still being typed: ~6
+  frames a character), `ORIC_KEYS=<frame>:<key>:<0|1>;...`, `ORIC_NMI=
+  <frame>`, `ORIC_WAV=<file>`, `ORIC_SHOTS=<n>`, `ORIC_LOG=<n>` (with
+  `ORIC_AY=1` the AY's registers, `ORIC_ZP`), `ORIC_STOP=<pc>[:<frame>]`,
+  `ORIC_TRACE=<pc>:<n>`, `ORIC_WATCH=<addr>[:<frame>]` (any RAM address:
+  its page's writes go through the callback; `ORIC_RING=<n>` instructions
+  before), `ORIC_DUMP=<addr>:<len>;...`, `ORIC_DASM=<addr>:<n>`.
+- `make -C components/oric/host check`: "37631 BYTES FREE" and "Ready"
+  after 300 frames, a typed FOR loop's output, typed mixed case with CAPS
+  off.
+- Checked on the host (2026-11-19): BASIC 1.1's banner, "37631 BYTES
+  FREE" and "Ready" at frame ~123 (the RAM test); the cursor toggles every
+  250,050 cycles (25 ticks of 10,002); typed PRINT, FOR/NEXT, LIST, RUN,
+  every symbol on the keys; CTRL-T and small letters; HIRES with CURSET,
+  CIRCLE, DRAW, PAPER 4 and INK 3 (yellow on blue, the three text rows
+  below), TEXT back; double height (the Atmos Manual's own example), the
+  alternate set, paper and ink attributes, an inverse red-paper attribute
+  (a cyan cell, then red: MB2's example), flashing 16 frames on and 16
+  off; PING at 2604 Hz, SOUND 1,10/30/100 at 6250, 2084 and 624 Hz, ZAP's
+  R0 $00-$6F in 0.17 s, SHOOT and EXPLODE's noise decays (0.5 s and
+  1.4 s), key clicks; NMI's warm start keeps the program; a 60 Hz attribute
+  at $BFDF makes frames 16,896 cycles. BASIC 1.0 (`ORIC_MODEL=1`): its
+  banner, "47870 BYTES FREE", PRINT 2+2.
+
 ## Where things are (outside git, this PC)
 
 - `~/Development/oric-dl/`: the research downloads (`docs/`: the Atmos
@@ -135,7 +235,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   jasmin.cpp; `roms/`: MAME's ROM sets), 79 MB. The software download
   was stopped early: 15 of oric-soft.bedroomlan.org's ~730 files
   (`bedroomlan_index.tsv` lists them all) and oric.org's 347 titles
-  listed (`oricorg/titles.tsv`, nothing downloaded): `TODO.md` 7.
+  listed (`oricorg/titles.tsv`, nothing downloaded): `TODO.md` 5.
 - `roms/*.rom` here (not in git): `roms/README.md` (MAME's sets or
   oric-soft; the CRCs to check).
 

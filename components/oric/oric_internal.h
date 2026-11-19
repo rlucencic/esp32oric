@@ -40,6 +40,9 @@
 /* The ULA's mode register (a $18-$1F attribute's low bits) */
 enum { MODE_50HZ = 0x02, MODE_HIRES = 0x04 };
 
+/* The 6502's IRQ line: a bit a source */
+enum { IRQ_VIA = 0x01 };
+
 typedef struct {
     oric_config_t cfg;
     m6502_t cpu;
@@ -49,7 +52,7 @@ typedef struct {
 
     uint64_t frame_start;               /* the cycle line 0 began at */
     int line;                           /* the line being run */
-    int lines;                          /* this frame's: 312 or 264 */
+    int lines;                          /* the last frame's: 312 or 264 */
     uint32_t frames;
 
     uint8_t mode;                       /* the ULA's mode register: persists across lines and frames */
@@ -61,8 +64,8 @@ typedef struct {
      */
     uint8_t screen_touched;
 
-    /* The VIA's outputs as last seen */
-    uint8_t port_a, port_b;
+    uint8_t port_b;                     /* the VIA's port B pins as last seen (PB4 strobe, PB6 motor) */
+    volatile bool nmi_request;          /* the button underneath, from another task */
 } oric_t;
 
 extern oric_t oric;
@@ -76,18 +79,18 @@ static inline uint64_t oric_line_start(void)
 bool oric_video_init(void);
 void oric_video_reset(void);
 void oric_video_frame_start(void);
-void oric_video_line(int line);         /* decode a picture line (0-223) */
+void oric_video_line(int line);         /* decode a picture line (0-223) as it starts */
 void oric_video_frame_end(void);
 
 /* psg.c: the AY-3-8912 */
-void psg_init(void);
 void psg_reset(void);
 void psg_bus(bool bdir, bool bc1, uint8_t data);
 uint8_t psg_read(void);
 uint8_t psg_port_a(void);               /* the I/O port's pins: the keyboard's column select */
-void psg_frame_end(void);
+void psg_line(void);                    /* a line's sound: two samples */
 void psg_get_regs(uint8_t regs[16]);
 
 /* keyboard.c */
 bool oric_keyboard_sense(uint8_t row, uint8_t columns);   /* PB3 */
+void oric_keyboard_reset(void);
 void oric_keyboard_frame(void);
