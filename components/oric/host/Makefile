@@ -8,6 +8,7 @@ BUILD     := build
 CFLAGS    := -O2 -g -Wall -Wextra -Wno-unused-parameter -DM6502_HOST_HOOK -DORIC_HOST_HOOK -I$(ORIC)/include -I$(ORIC) \
              -I$(M6502)/include -I$(EMUDBG)/include
 ROM       ?= $(ROOT)/roms/basic11b.rom
+MDROM     ?= $(ROOT)/roms/microdis.rom
 FRAMES    ?= 300
 
 ORIC_SRCS := $(wildcard $(ORIC)/*.c)
@@ -32,11 +33,12 @@ $(BUILD)/%.o: $(EMUDBG)/%.c $(EMUDBG)/include/emudbg.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# Regression checks (the ROM needed): "Ready" and the bytes free, typed
+# Regression checks (the ROMs needed): "Ready" and the bytes free, typed
 # BASIC and its answer, typed capitals and small letters with CAPS off;
 # CSAVE onto a blank tape (its header), CLOAD by name fast and at 300 baud
 # in real time; a loader of its own (tools/loadertap.py) fast and in real
-# time
+# time; the Microdisc's EPROM booting tools/mkdisk.py's test disk, its
+# WD1793 commands' results and the tracks they wrote
 check: $(BUILD)/oric_host
 	ORIC_TEXT=1 ./$(BUILD)/oric_host $(ROM) 300 $(BUILD)/check.ppm | grep -q "37631 BYTES FREE"
 	ORIC_TEXT=1 ./$(BUILD)/oric_host $(ROM) 300 $(BUILD)/check.ppm | grep -q "^|  Ready"
@@ -59,6 +61,11 @@ check: $(BUILD)/oric_host
 	cp $(BUILD)/loader.tap $(BUILD)/loader2.tap
 	ORIC_REALTIME=1 ORIC_TAPE=$(BUILD)/loader2.tap ORIC_DUMP=0800:30 ORIC_TYPE='150:CLOAD""\n' \
 	    ./$(BUILD)/oric_host $(ROM) 600 $(BUILD)/check.ppm | grep -q "^00 00 80 00 50 0F 50 00 00 44 41 54 41 00 30 31"
+	python3 -I $(ROOT)/tools/mkdisk.py $(BUILD)/disk.dsk > /dev/null
+	ORIC_MICRODISC=$(MDROM) ORIC_DISK0=$(BUILD)/disk.dsk ORIC_DUMP='0800:24;08FF:1' \
+	    ./$(BUILD)/oric_host $(ROM) 1500 $(BUILD)/check.ppm | tr '\n' ' ' \
+	    | grep -q "04 00 05 00 00 00 00 00 00 05 06 10 11 06 06 10 00 08 10 00 00 00 10 00 AA "
+	python3 -I $(ROOT)/tools/mkdisk.py --check $(BUILD)/disk.dsk > /dev/null
 	@echo "host checks passed"
 
 clean:

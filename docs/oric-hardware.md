@@ -71,12 +71,12 @@ and MB2 (16 frames on, 16 off) but MAME and CLK use 32/32; when the 50/60
 choice takes effect (die RTL: the same frame; CLK: the next one); the
 power-on state of the ULA's mode register and of RAM; what floating reads
 return; whether the Microdisc's $0314 status bit is gated by its IRQ
-enable (MAME) or not (CLK, MiSTer); how far the Microdisc mirrors and
-claims page 3 ($0314/$0318 exactly in MAME, $0310-$031B in the MiSTer
-model, $0310-$03FF in CLK); control register bit 2's meaning; MFM_DISK
-geometry type 2's exact layout; how a Sedoric disk satisfies the EPROM's
-boot lookup (not traced); why MAME puts $42 at RAM $E000 on reset (nothing
-in the EPROM reads it). (The Atmos Manual's double-height example, once
+enable (MAME) or not (CLK, MiSTer); control register bit 2's meaning;
+MFM_DISK geometry type 2's exact layout (none of 29 images uses it). Settled
+since (7.2, 7.5): the Microdisc claims $0310-$031B (the schematic's
+74LS138); a Sedoric disk boots through the EPROM's SYSTEM.DOS lookup (Oric
+DOS 0.6's file format), and Sedoric's boot sector checksums the overlay
+RAM, which is why MAME puts $42 at $E000. (The Atmos Manual's double-height example, once
 listed here, agrees with the hardware rule: 4.8.) Single sources: the vertical counter
 stepping at the start of horizontal sync (ULARTL), PB5 unused (AUG),
 Oric DOS's 16 sectors per track (MDM), the MiSTer model's Microdisc
@@ -189,7 +189,8 @@ with bit 6 set, so that no stray attribute (notably a 60 Hz one) appears
 But not in page 2: the ROM reads its key buffer $02DF (bit 7 = a new key)
 before it ever writes it, and noise there typed a phantom key after
 "Ready" in our first run (2026-11-19). The core keeps noise in
-$0400-$BFFF only and zeros elsewhere [derived].
+$0400-$FFFF (the overlay RAM too: Sedoric's boot checksums it, 7.5) and
+zeros in pages 0-3 [derived].
 
 ### 1.6 What the emulator's map needs [derived]
 
@@ -895,16 +896,24 @@ reboots [SED p1; MAME's extension reset line].
 
 Sources: [MAME `microdisc.cpp`; CLK `Microdisc.cpp`; MDROM uses $0310 as
 command/status, $0311 track, $0312 sector, $0313 data, $0314, $0318]
-[confirmed]. Mirrors [UNCERTAIN]: MAME decodes $0314 and $0318 exactly;
-CLK mirrors $0314-$0317 and $0318-$031B and claims all of $0310-$03FF;
-the MiSTer model (GPL, behaviour only) claims $0310-$031B (FDC
-$0310-$0313, control $0314-$0317, DRQ $0318-$031B) and leaves
-$031C-$03FF to the VIA. The EPROM uses only the addresses in the table.
+[confirmed]. Mirrors: MAME decodes $0314 and $0318 exactly; CLK mirrors
+$0314-$0317 and $0318-$031B and claims all of $0310-$03FF; the MiSTer
+model (GPL, behaviour only) claims $0310-$031B (FDC $0310-$0313, control
+$0314-$0317, DRQ $0318-$031B) and leaves $031C-$03FF to the VIA. The
+schematic (MDSCH sheet 2, read 2026-11-19) agrees with the MiSTer model:
+IC10, a 74LS138 on the low address lines (enabled through IC18's NOR for
+page 3's low half), drives the WD1793's /CS from Y4, the control latch
+(IC6, a 74LS273) and the INTRQ read from Y5 and the DRQ read from Y6; IC15
+(an AND of those three) pulls I/O CONTROL low, so $031C-$031F and the rest
+of the page stay the VIA's [derived; the pins read off a scan]. The EPROM
+and Sedoric use only the addresses in the table.
 
 Whether $0314's bit 7 is gated by the IRQ enable [UNCERTAIN]: MAME reports
 INTRQ only while control bit 0 is set; CLK and the MiSTer model report raw
 INTRQ. The EPROM reads it only with bit 0 set [MDROM $E3C1], so both work
-for it.
+for it; so do Sedoric 2 and 3, Oric DOS 1.13 and the 22 bootable images
+run here (raw, as CLK). The scan's IC19 NANDs combine INTRQ with the
+latch's Q0 for /IRQ; which one feeds the $0314 read isn't legible.
 
 Control register ($0314, write; all 0 at reset):
 
@@ -956,6 +965,23 @@ So the emulator needs INTRQ -> /IRQ gated by bit 0, INTRQ cleared by a
 status read, DRQ visible at $0318, and double-density data arriving no
 faster than one byte per 32 us.
 
+- The boot sends Force Interrupt $D8 (I3, an immediate interrupt) and then
+  its commands, never a $D0 [MDROM $ECD3, $E393]. The FD179X data sheet has
+  I3's INTRQ held until a $D0 (status reads and new commands not clearing
+  it); held, the boot's first Read Sector ends at once (the IRQ handler
+  takes $0314's INTRQ for the command's end) and the EPROM reports "No
+  operating system on disc". Cleared like any other INTRQ (CLK) it boots
+  [derived, 2026-11-19].
+- Head load: the WD1793's HLD drives the motor line and two LS123
+  monostables (IC21: 27 kohm with 2.2 uF, ~27 ms, and 270 kohm with 10 uF,
+  ~1.2 s by 0.45 R C) gate HLT [MDSCH sheet 2]; CLK tuned its head-load
+  delay to 0.96 s against a video of a real machine listing a directory.
+  The core takes 1 s [derived].
+- With no system disk the EPROM prints "No operating system on disc" and
+  stops for good (`JMP $EE8F`); with an unreadable or empty drive it asks
+  "insert system disc" and tries again. A Microdisc can't run BASIC without
+  a DOS disk; the emulator's Microdisc is a setup choice.
+
 ### 7.5 Boot from the EPROM [MDROM] [derived]
 
 1. $EB7E: SEI, CLD, stack; a delay of about 0.33 s; clears overlay RAM
@@ -981,15 +1007,30 @@ AUG describes an earlier method for Oric DOS V1.1: the bootstrap copies
 itself to RAM at $E000-$FFFF, loads the DOS to $7400-$A020, which copies
 itself to $D400-$FFFF and prints "ORIC DOS V1.1" [AUG p114] [one source;
 not what this EPROM does]. Sedoric lives in overlay RAM $C000-$FFFF and
-uses page 4 [SED p1]; how a Sedoric master disk meets this EPROM's
-SYSTEM.DOS lookup was not traced [UNCERTAIN].
+uses page 4 [SED p1].
 
-MAME writes $42 to RAM $E000 at every reset ("Microdisc needs a
-non-fully-zero high ram") [MAME `machine_reset`]. Nothing in the EPROM
-reads RAM $E000 (no data read of $E000 in the disassembly; the boot path
-clears and tests only $C000-$C1FF) [derived]; perhaps a DOS's warm-start
-check [UNCERTAIN]. CLK's comment says the Microdisc "sort of assumes"
-random RAM [CLK].
+The EPROM's lookup, traced (2026-11-19, MDROM $E4CE-$E5C1, Sedoric 3's
+master): track 0 sector 3 is the directory (two bytes of link, a count,
+then 16-byte entries: a 9-byte name such as "SYSTEMDOS", 7 bytes); the
+file's first sector is track 0 sector 2 for every system disk here. Oric
+DOS 0.6's file format: bytes 0-1 the next sector's track and sector
+(sector 0: the last), then segments, each a header ($FF, $00, load, end,
+exec; the first segment's exec is the file's, kept at $C14B) and records
+of a length byte and that many bytes ($00 ends the sector's records, $FF
+starts the next segment's header). After loading, the EPROM copies the
+0-ended banner at $9FD0 to the screen's top row (Sedoric's first segment is
+that one $00 byte), then jumps through the stub at $BFE0 (control $84) to
+`JMP ($C14B)`: Sedoric 3's $B902 [derived]. `tools/mkdisk.py` writes a
+system file of its own in this format, which the EPROM boots.
+
+Sedoric's boot code there sums the overlay RAM from $C980 on: 0 is taken
+for Sedoric still being in memory (a warm start: 4 sectors loaded), else
+it loads its 60 [derived]. That is why MAME writes $42 to RAM $E000 at
+every reset ("Microdisc needs a non-fully-zero high ram") [MAME
+`machine_reset`]: with all zeros there Sedoric jumps into code it never
+loaded. Real DRAM powers up with something in it (CLK: the Microdisc
+"sort of assumes" random RAM); the core fills the overlay RAM with its
+power-on noise.
 
 ### 7.6 Drives and disk geometry
 
@@ -1023,8 +1064,9 @@ Geometry 1: all tracks of side 0, then all of side 1 (track offset 256 +
 accepts only type 1 and a file size of exactly 256 + 6400 x sides x
 tracks. Geometry 2: interleaved by track (side 0 track 0, side 1 track 0,
 side 0 track 1 ...) [DFW-DSK]; CLK's offset formula for it (track x
-tracks x sides + side) does not match that [UNCERTAIN; images are almost
-always type 1].
+tracks x sides + side) does not match that [UNCERTAIN]. All 29 images of
+oric-soft.bedroomlan.org's DISKS section are type 1 (1 or 2 sides, 38 to
+82 tracks); the core reads type 2 as DFW-DSK has it, untried.
 
 Track bytes are the decoded byte stream of the track (no clock bits)
 [DFW-DSK; MAME; CLK]:

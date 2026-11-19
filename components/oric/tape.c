@@ -475,8 +475,8 @@ void tape_map(void)
  */
 static void map_pages(void)
 {
-    if (oric.rom == NULL) {
-        return;
+    if (oric.rom == NULL || !oric.basic_in) {
+        return;                         /* the Microdisc's EPROM or the overlay RAM there */
     }
     for (size_t i = 0; i < TRAP_PAGES; i++) {
         uint8_t page = s_trap_pages[i];

@@ -24,6 +24,11 @@
  *   ORIC_NEWTAPE=<file.tap> a blank tape made and put in
  *   ORIC_REALTIME=1         tapes load in real time (no traps)
  *   ORIC_TAPE_LOG=1         the tape's state each second
+ *   ORIC_MICRODISC=<rom>    a Microdisc with that EPROM (microdis.rom)
+ *   ORIC_DISK0..3=<file.dsk> disks in drives A-D (written in place: use copies)
+ *   ORIC_NEWDISK=<file.dsk>:<sides>:<tracks>  a blank disk made and put in A
+ *   ORIC_DISK_LOG=1         the controller's commands
+ *   ORIC_INSERT=<frame>:<drive>:<file.dsk>[;...]  a disk in (an empty name ejects)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -203,6 +208,32 @@ static void type_for_frame(uint32_t frame)
     }
 }
 
+/* ORIC_INSERT: frame:drive:file;... */
+static void insert_for_frame(uint32_t frame)
+{
+    const char *e = getenv("ORIC_INSERT");
+    while (e && *e) {
+        char *colon;
+        unsigned long f = strtoul(e, &colon, 10);
+        const char *end = strchr(e, ';');
+        if (*colon == ':' && f == frame) {
+            int drive = atoi(colon + 1);
+            const char *name = strchr(colon + 1, ':');
+            char path[256] = "";
+            if (name) {
+                size_t n = end ? (size_t)(end - name - 1) : strlen(name + 1);
+                snprintf(path, sizeof(path), "%.*s", (int)n, name + 1);
+            }
+            if (path[0]) {
+                oric_disk_insert(drive, path);
+            } else {
+                oric_disk_eject(drive);
+            }
+        }
+        e = end ? end + 1 : NULL;
+    }
+}
+
 static void wav_header(FILE *f, uint32_t frames)
 {
     uint32_t bytes = frames * 4, rate = ORIC_AUDIO_HZ, byte_rate = rate * 4;
@@ -252,6 +283,9 @@ int main(int argc, char **argv)
     cfg.model = getenv("ORIC_MODEL") && atoi(getenv("ORIC_MODEL")) == 1 ? ORIC_1 : ORIC_ATMOS;
     cfg.rom = load(argv[1], ORIC_ROM_SIZE);
     cfg.ram = calloc(1, ORIC_RAM_SIZE);
+    if (getenv("ORIC_MICRODISC")) {
+        cfg.disk_rom = load(getenv("ORIC_MICRODISC"), ORIC_DISK_ROM_SIZE);
+    }
     if (!oric_init(&cfg)) {
         fprintf(stderr, "oric_init failed\n");
         return 1;
@@ -269,9 +303,11 @@ int main(int argc, char **argv)
         return 0;
     }
     if (getenv("ORIC_WATCH")) {
+        extern int oric_host_watch_page;
         unsigned a = strtoul(getenv("ORIC_WATCH"), NULL, 16);
-        if (oric.cpu.wr[a >> 8] != NULL && a < 0xC000) {
-            oric.cpu.wr[a >> 8] = NULL;     /* its page's writes through the bus callback */
+        if (a < 0xC000) {
+            oric_host_watch_page = a >> 8;  /* its page's writes through the bus callback */
+            oric.cpu.wr[a >> 8] = NULL;
         }
     }
     oric_tape_fast(!getenv("ORIC_REALTIME"));
@@ -283,6 +319,28 @@ int main(int argc, char **argv)
     if (tape && !oric_tape_insert(tape)) {
         fprintf(stderr, "%s: can't put it in\n", tape);
         return 1;
+    }
+    if (getenv("ORIC_NEWDISK")) {
+        char path[256];
+        int sides = 2, tracks = 42;
+        snprintf(path, sizeof(path), "%s", getenv("ORIC_NEWDISK"));
+        char *c = strchr(path, ':');
+        if (c) {
+            *c = 0;
+            sscanf(c + 1, "%d:%d", &sides, &tracks);
+        }
+        if (!oric_disk_create(path, sides, tracks) || !oric_disk_insert(0, path)) {
+            fprintf(stderr, "%s: can't make it\n", path);
+            return 1;
+        }
+    }
+    for (int i = 0; i < ORIC_DRIVES; i++) {
+        char name[16];
+        snprintf(name, sizeof(name), "ORIC_DISK%d", i);
+        if (getenv(name) && !oric_disk_insert(i, getenv(name))) {
+            fprintf(stderr, "%s: can't put it in\n", getenv(name));
+            return 1;
+        }
     }
     bool tape_log = getenv("ORIC_TAPE_LOG") != NULL;
     int log_every = getenv("ORIC_LOG") ? atoi(getenv("ORIC_LOG")) : 0;
@@ -299,6 +357,7 @@ int main(int argc, char **argv)
             oric_nmi();
         }
         type_for_frame(s_frame);
+        insert_for_frame(s_frame);
         oric_run_frame();
         if (wav) {
             int16_t buf[2048];
@@ -350,6 +409,9 @@ int main(int argc, char **argv)
     }
     if (tape) {
         oric_tape_eject();              /* (writes what CSAVE left) */
+    }
+    for (int i = 0; i < ORIC_DRIVES; i++) {
+        oric_disk_eject(i);             /* (writes the changed tracks) */
     }
     printf("after %u frames: PC %04X\n", frames, oric.cpu.pc);
     write_ppm(out);

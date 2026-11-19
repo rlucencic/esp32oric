@@ -17,9 +17,11 @@ typing, text and hires with every attribute, the AY's sound, NMI, 50/60
 Hz; BASIC 1.0 for the Oric-1), its host build (`make -C
 components/oric/host run`, `check`), the board side (`main/`: the
 setup's Model row, keyboards, ROMs from flash or the card, status, console;
-checked on the Tab5) and tapes (TAP files, CLOAD and CSAVE at once or in
-real time, 2026-11-19: 348 originals on the host, the Tab5). Next:
-`TODO.md`.
+checked on the Tab5), tapes (TAP files, CLOAD and CSAVE at once or in
+real time, 2026-11-19: 348 originals on the host, the Tab5) and the
+Microdisc (its EPROM, a WD1793 in real time, MFM_DISK images in drives A
+and B written in place, 2026-11-19: Sedoric 2 and 3, Oric DOS and 22 of 29
+original disks booting on the host, Sedoric on the Tab5). Next: `TODO.md`.
 
 The board side (tasks, LCD, touch, SD, WiFi, BLE, setup screen, web page,
 console) and the 6502 core (`m6502`) are the shared library in
@@ -56,10 +58,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   `basic11b.rom` slot 0, `basic10.rom` slot 1, `microdis.rom` slot 2; a
   file of the same name in the SD card's `oric/roms` overrides one (any
   case; `roms/README.md`: where they come from). NVS namespace `oric`
-  (`model`: 0 Atmos, 1 Oric-1; `tape_fast`: 1 fast, 0 real time; the
-  Microdisc's to come), drives `oricdisks`. mDNS `oric-atmos.local`. The SD
-  card's `oric/` folder: `.tap` tapes (blank ones `TAPEnnnn.tap`, empty
-  files), later `.dsk` (MFM_DISK) disks. The boards are shared with the
+  (`model`: 0 Atmos, 1 Oric-1; `tape_fast`: 1 fast, 0 real time;
+  `microdisc`: 1 attached), drives `oricdisks` (`disk_a` the tape, `disk_b`
+  and `disk_c` drives A and B). mDNS `oric-atmos.local`. The SD card's
+  `oric/` folder: `.tap` tapes and `.dsk` (MFM_DISK) disks (blank ones
+  `BLANKnnnn.tap`, an empty file, and `BLANKnnnn.dsk`, unformatted; until
+  2026-11-19 tapes were `TAPEnnnn.tap`). The boards are shared with the
   other projects: after another one, a full `flash`.
 - **The Tab5 after flashing (2026-11-19)**: the RTS hard reset at the
   flash's end (and `emu_console.py reset`) left it in the ROM's download
@@ -77,8 +81,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - The web API (`curl http://oric-atmos.local/...`; this PC resolves the
   name to IPv6 only: the board's IPv4 address works): `curl -T game.tap
   .../disks/game.tap` uploads, `curl -X PUT --data "game.tap"
-  .../api/drive/1` puts it in, `curl -X POST ".../api/new?size=1"` makes a
-  blank tape, `.../api/status` (`board.load`: the cores' busy %).
+  .../api/drive/1` puts it in (drive 1 the tape, 2 A:, 3 B:; `DELETE
+  .../api/drive/2` ejects), `curl -X POST ".../api/new?size=1"` makes a
+  blank tape, `size=537856` a blank disk of 2 x 42 tracks (`1024256`: 80),
+  `POST .../api/drive/2/offer` takes the offer of a disk in A: or B: while
+  the Microdisc is off (switched on, a restart), `POST .../api/reset`,
+  `.../api/status` (`board.load`: the cores' busy %; `offers`).
   `/api/status` got no answer before the machine's first start (the setup
   screen up after a boot) on 2026-11-19, the other requests did; after
   Start it answers (esp32emu's, not looked into yet).
@@ -94,14 +102,18 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/psg.c` | The AY-3-8912: registers through BDIR/BC1, port A (the keyboard's columns), tones, noise, envelope, the mono mix through a capacitor into the sound ring (31250 Hz) |
 | `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
 | `components/oric/tape.c` | The cassette: TAP files indexed, played as CB1 edges while the motor runs and something reads them, BASIC 1.1's tape routines trapped (CLOAD and CSAVE at once), saves onto the tape's end |
+| `components/oric/microdisc.c` | The Microdisc: page 3's $0310-$031B, the control register, paging (BASIC, the EPROM, the overlay RAM), INTRQ to the IRQ |
+| `components/oric/wd1793.c` | Its WD1793 and drives: Type I-IV commands in real time (steps, the head's load, searches, bytes 32 us apart, worked out when the CPU looks), MFM_DISK images in memory, written tracks back to their files |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
 | `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
-| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model and Tape rows, the Tape drive (the core's tape, blank tapes), status rows, console `k`/`K`/`T`/`N`/`W` |
+| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM, the Microdisc's EPROM), the setup's Model, Tape and Microdisc rows, the drives (the tape, disks A: and B:, blank ones, the disks' offer), disk writes flushed, status rows, console `k`/`K`/`T`/`N`/`W` |
 | `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
 | `main/rom_store.c` | The ROMs: a slot of `oric_roms` (mapped, copied, unmapped), the SD card's `oric/roms` over it |
-| `main/settings.c` | NVS `oric`: the model, fast tapes |
+| `main/settings.c` | NVS `oric`: the model, fast tapes, the Microdisc |
 | `tools/tapesmoke.py` | Every TAP in a folder through the host build (CLOAD"", fast or real time): a summary and a contact sheet |
 | `tools/loadertap.py` | A test tape whose loader reads CB1 itself (the ROM's routines copied to RAM) |
+| `tools/mkdisk.py` | A test disk the EPROM boots: its SYSTEM.DOS (a small 6502 assembler inside) runs the WD1793's commands and leaves their results at $0800 and on the screen; `--check` the tracks it wrote |
+| `tools/disksmoke.py` | Every MFM_DISK image in a folder booted through the host build with a Microdisc: commands, errors, pictures, a contact sheet |
 | `docs/oric-hardware.md` | The hardware research: memory map, VIA, AY, ULA and display, keyboard and NMI, cassette and TAP, Microdisc and MFM_DISK, reset; sources |
 | `roms/` | The ROMs (not in git; `roms/README.md` says where they come from) |
 
@@ -146,17 +158,20 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   trapped for a fast load, or the bits played through CB1: both, below).
 - **The Microdisc** (docs 7): a WD1793 at 1 MHz at $0310-$0313, the
   control register at $0314 (IRQ enable, ROM disable, MAP, side, drive,
-  density), status at $0314 and DRQ at $0318; the 8 KB EPROM boots Oric
-  DOS or Sedoric; disks as MFM_DISK images (a header, then the tracks as
-  raw MFM bytes, 6400 a track).
+  density), INTRQ at $0314 and DRQ at $0318 (bit 7 low), claimed
+  $0310-$031B (the schematic's 74LS138: the rest of page 3 is the VIA's);
+  the 8 KB EPROM boots a SYSTEM.DOS (Oric DOS 0.6's directory and file
+  format: Sedoric, Oric DOS) from drive A, or stops at "No operating
+  system on disc"; disks as MFM_DISK images (a header, then the tracks as
+  raw MFM bytes, 6400 a track, 6250 a turn).
 - **Reset** (docs 8): BASIC 1.1's RESET at $F88F; NMI at $0247, IRQ at
   $0244 (page-2 jumps); "Ready" needs the RAM test, the VIA's timer 1
   interrupt and the keyboard scan's answers.
 - Open questions (docs, Summary): the flash rate (16/16 frames from the
   die RTL, MAME and Clock Signal 32/32), when a 50/60 switch takes effect,
   the power-on state of the ULA and RAM, floating reads, the Microdisc's
-  $0314 status gating and page-3 decoding, MFM_DISK geometry type 2,
-  Sedoric's boot lookup.
+  $0314 status gating (raw here, as CLK; everything run works either way)
+  and MFM_DISK geometry type 2 (no image uses it).
 
 ## The core (`components/oric`), as written
 
@@ -171,10 +186,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - **Memory** (`oric.c`): RAM and the ROM through the 6502 core's page
   pointers, flat at 1 MHz; page 3 the VIA (register = address & 15)
   through the callbacks, writes to $9800-$BFFF too (a changed byte sets
-  `screen_touched` for two frames), writes to $C000-$FFFF to a sink page.
-  Power-on: noise with bit 6 set in $0400-$BFFF (no stray attributes on
-  the picture while the RAM test runs), zeros elsewhere (see the lessons);
-  the ULA's mode 50 Hz text.
+  `screen_touched` for two frames), writes to $C000-$FFFF to a sink page
+  while BASIC is there (`oric_map_high()`: BASIC, or what the Microdisc
+  pages in; the tape's traps only with BASIC in). Power-on: noise with bit
+  6 set in $0400-$FFFF (no stray attributes on the picture while the RAM
+  test runs; the overlay RAM's for Sedoric), zeros in pages 0-3 (see the
+  lessons); the ULA's mode 50 Hz text.
 - **The VIA's wiring**: port A out to the AY's bus at every change of ORA,
   DDRA or the PCR (`psg_bus(CB2, CA2, port A)`); port A in is the AY's
   register in its read cycle; PB3 in is the keyboard's sense for the row
@@ -245,19 +262,65 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   only watched (a search starting at the tape's end rewinds it once). The
   status (`oric_tape_status()`): the file at the head, motor, playing,
   files loaded and saved.
+- **The Microdisc** (`microdisc.c`, docs 7; `oric_config_t.disk_rom` set:
+  attached): $0310-$031B claimed (the FDC, the control register and INTRQ,
+  DRQ), the rest of page 3 the VIA's; the control register (0 at reset:
+  the EPROM's RESET vector) pages $C000-$FFFF (`microdisc_map()`: BASIC
+  with bit 1, else overlay RAM and the EPROM at $E000, bit 7 overlay RAM
+  all through); only a change of bits 1 or 7 remaps, and then only
+  $C0-$FF (Sedoric writes the register ~180 times a frame); INTRQ to the
+  6502's IRQ bit 1 while bit 0 is set, $0314 shows it raw.
+- **The WD1793** (`wd1793.c`): an image read whole (PSRAM), its tracks the
+  bytes of a turn: every disk turns in phase from cycle 0, byte i under
+  the head while (cycles / 32) % 6250 == i; a track is parsed for its IDs
+  and data marks (records skipped whole, as MAME's reader does) and kept
+  until it changes. Commands in real time, an event (`fdc_event_at`, in
+  `run_to()`) a phase: Type I a step at a time at r1r0's 6/12/20/30 ms
+  (restore 255 steps at most, seek, step, in, out; u; the head stops at
+  0 and 84), verify after 30 ms (an ID of the track, else a seek error
+  after 5 index pulses; no disk: the same); Type II/III after HLT (1 s
+  after HLD rose: the schematic's LS123, CLK's 0.96 s) and E's 30 ms: the
+  first ID wanted from then (track, sector, side compare with C; CRC
+  errors noted and passed; RNF at the 5th index pulse), its data mark
+  within 43 bytes, the bytes 32 us apart, worked out when the CPU looks
+  (DRQ at $0318, the data register: the byte due, lost data if one was
+  missed; a write's byte late goes out as $00), the CRC checked, multiple
+  sectors with m; Write Sector at the ID's CRC + 22 (12 zeros, three $A1,
+  the mark, the data, its CRC, a $4E) into the track; Read Address from
+  the $FE on (the sector register gets the track); Read Track and Write
+  Track from the index ($F5 an $A1 presetting the CRC, $F6 a $C2, $F7 the
+  CRC: data can't hold $F5-$F7); Force Interrupt ends a command, $D8 an
+  interrupt now (cleared as any other: see the lessons), $D4 every index.
+  Status: Type I's (head loaded, track 0, the index pulse, 2 ms a turn)
+  or II/III's; INTRQ cleared by a status read or a command. Not ready
+  with no disk (Type II/III end at once). HLD (the motor) drops after 15
+  idle turns. Written tracks are marked; `oric_disk_flush()` writes them
+  into the file in place (the board: after 2 s without writes, at eject);
+  a file that can't be opened for writing is a write-protected disk.
+  Geometry 1 and 2 (2 untried), 1-2 sides, up to 100 tracks.
 
 ## The board side (`main/`)
 
-- **Setup screen** (Tab5): Model at y 250 (Atmos x 440, Oric-1 x 795),
-  Tape at y 326 (Fast x 440, Real time x 795: live, no restart), Sound at
-  y 402, Start/Restart/Back `t 1065 637`, the setup corner `t 1265 15
-  2600` (held).
-- **The tape drive** (`disks_config_t`, folder `oric`, NVS `oricdisks`):
-  any `.tap` goes in (the core's `oric_tape_insert()`: an empty file is a
-  blank tape), the web page's New makes `TAPEnnnn.tap` (empty), its light
-  is the motor, its reads and writes the files loaded and saved at once,
-  its detail the file at the head ("File 2 of 3: "CODE", machine code at
-  #0400-#0405, AUTO") or "At its end".
+- **Setup screen** (Tab5, since the Microdisc row): Model at y 227 (Atmos
+  x 426, Oric-1 x 781), Tape at y 298 (Fast, Real time: live, no
+  restart), Microdisc at y 369 (Off, On: a restart), Sound at y 440,
+  Start/Restart/Back `t 1065 637`, the setup corner `t 1265 15 2600`
+  (held).
+- **The drives** (`disks_config_t`, folder `oric`, NVS `oricdisks`):
+  Tape, A: and B: (`accepts()`: `.dsk` for A: and B:, anything else for
+  the tape). The tape: the core's `oric_tape_insert()` (an empty file is a
+  blank tape), its light the motor, its reads and writes the files loaded
+  and saved at once, its detail the file at the head ("File 2 of 3:
+  "CODE", machine code at #0400-#0405, AUTO") or "At its end". The disks:
+  `oric_disk_insert()` (the whole image into PSRAM), their light the
+  controller's head load on the drive selected, reads and writes in
+  sectors, the detail their sides, tracks and the head's track. New:
+  `BLANKnnnn.dsk` (2 x 42 or 2 x 80 tracks, unformatted) or
+  `BLANKnnnn.tap`. A disk in A: or B: while the Microdisc is off is
+  offered (esp32emu's offers: the setup's disk page, the web page): taking
+  it switches the Microdisc on and restarts. Disk writes go to the card
+  from `every_second()` through `emu_paused()` once 2 s passed without
+  one.
   The status lines show the WiFi name and IP: keep them out of published
   images.
 - **Picture**: 240 x 224 at `view_width` 800 (1.33 : 1, as a TV frames the
@@ -271,19 +334,24 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - **Console**: `k <n>` taps matrix key n (row * 8 + column, decimal),
   `K <n> <0|1>`, `T <text>` (`\n` RETURN; ~6 frames a character), `N` the
   NMI button, `W` rewinds the tape. `i` (the tool's `info`): frames,
-  registers, text/hires, 50/60 Hz, the tape's position, motor, playing.
+  registers, text/hires, 50/60 Hz, the tape's position, motor, playing,
+  the Microdisc (on/off, its control register, the WD1793's command and
+  status, track, sector, drive and side, busy).
 - **Web page's card** (`status()`): System, ROM, Screen (mode, 50/60 Hz),
   Sound (the AY's channels: tone frequency, noise, volume or envelope),
   VIA (timer 1's period, its interrupt), Keyboard (CAPS), Cassette (the
   motor, playing at 2400 or 300 baud, fast or real time, a failed save),
-  Expansions. The detailed card: `TODO.md`.
+  Microdisc (the WD1793's last command, track, sector, status, the drive
+  and side, motor, what $C000-$FFFF holds, sectors read and written) or
+  Expansions (none). The detailed card: `TODO.md`.
 
 ## Lessons (each one cost a debugging session)
 
 - **Page 2 noise typed a phantom key**: power-on RAM noise everywhere put
   $E8 in $02DF, the key buffer (bit 7 = a new key): BASIC's first input
   read an 'h' after "Ready". The ROM never clears it before reading.
-  Noise only where the RAM test goes ($0400-$BFFF).
+  Noise only from $0400 on (where the RAM test goes, and the overlay RAM:
+  Sedoric, below).
 - **CAPS is a mask, not a flag**: $020C is $FF with CAPS on, $7F off (ANDed
   onto the key table's bit 7, the small letters: ROM $F50C). Taken as
   "non-zero = on", typed capitals came out small with CAPS off.
@@ -330,6 +398,27 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   time, every fetch went through the bus callback: core 1 53-55% on the
   Tab5 (16% idle). While the tape plays the pages are the ROM's again
   (nothing to trap then): 25-27%.
+- **Force Interrupt $D8's INTRQ is cleared as any other**: the data sheet
+  has it held until a $D0; the EPROM sends $D8 at boot and never a $D0, so
+  held, its IRQ handler took the next Read Sector for ended at once (lost
+  data, "No operating system on disc"). Clock Signal clears it on a status
+  read or a command, and the EPROM boots.
+- **Sedoric checks the overlay RAM for itself**: its boot sector sums
+  $C980 on and takes 0 for a warm start (Sedoric still there: 4 sectors
+  loaded, not 60). With the overlay RAM all zeros at power-on it jumped
+  into code it never loaded (an IRQ vector into zeros, BRKs for ever after
+  its banner). The power-on noise covers the overlay RAM now; MAME's
+  "$42 at $E000" is the same fix.
+- **Read Address's bytes follow the $FE**: searching to the ID's CRC, as
+  Read Sector does, left all six bytes in the past when the transfer
+  began: lost data every time. Sedoric reads an address to find the head
+  on another drive (DIR B), so drive B failed only in a new session
+  (straight after INIT Sedoric had the directory in memory).
+- **Write Track's data can't hold $F5-$F7**: they write an $A1 sync, a $C2
+  and the CRC, as on a 1793. `mkdisk.py`'s first test pattern (i ^ $A5)
+  had them from byte 80, and its sector read back with a CRC error; a
+  test loop that feeds Write Track must also keep up with 32 us a byte (a
+  JSR a byte doesn't).
 
 ## Testing
 
@@ -355,7 +444,18 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   after 300 frames, a typed FOR loop's output, typed mixed case with CAPS
   off; CSAVE onto a blank tape (its header's bytes), CLOAD by name fast and
   at 300 baud in real time; `tools/loadertap.py`'s tape fast and in real
-  time.
+  time; `tools/mkdisk.py`'s disk booted by the Microdisc's EPROM (`MDROM=`,
+  `roms/microdis.rom`), its 24 results (restore, seek with verify, read,
+  write and read back, read address, a multiple read to RNF, steps with
+  and without u, a seek past the image, side compare both ways, Write
+  Track and its sector read back, Force Interrupt) and `--check` of the
+  tracks it wrote.
+- Host disks: `ORIC_MICRODISC=<microdis.rom>` (a Microdisc),
+  `ORIC_DISK0`..`3=<file.dsk>` (written in place: copies),
+  `ORIC_NEWDISK=<file>:<sides>:<tracks>` (blank, in A),
+  `ORIC_INSERT=<frame>:<drive>:<file>[;...]` (empty: eject),
+  `ORIC_DISK_LOG=1` (each command and its end: errors, track, sector, the
+  head). The written tracks go to the file at the end (the eject).
 - **Tapes** (2026-11-19, host): CSAVE onto a blank tape (the ROM's format:
   `16 16 16 24`, the header, the name, the data), CSAVE ,S and ,AUTO, a
   memory block (`A#400,E#405`); loaded back fast and in real time at 2400
@@ -373,6 +473,29 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   one byte, the real time's started one, and tapes still loading at the
   cut-off); the contact sheets show title screens and menus. Not checked
   here: whether each program then runs (`TODO.md`, original software).
+- **The Microdisc** (2026-11-19, host): `tools/disksmoke.py` over
+  oric-soft.bedroomlan.org's DISKS section (29 MFM_DISK images, all
+  geometry 1): 22 boot without a controller error (Sedoric 2 and 3 to
+  their menus, Oric DOS 1.13's menu, Minised, Randos to BASIC, Forth 83
+  3.1, FontEdit, the picture disks, Patricia, Modem, the Magic X game
+  demo, Slime's menu); the seven with Stratsed's boot sector show "No
+  operating system on disc" (the Telestrat's: `TODO.md`); FT-DOS (a Jasmin
+  disk) gets "insert system disc". Sedoric 3: its menu, DIR, SAVE, LOAD
+  and RUN, the file still there in a new session from the written image,
+  drive B, INIT of a blank disk in B (both sides formatted, 1412 sectors
+  free, D/42/17) and a file saved onto it and loaded back. The whole
+  29-image run takes 2 s.
+- **The Microdisc on the Tab5** (2026-11-19): the setup's Microdisc row;
+  a disk put in A: with it off brings the offer (web API), taking it
+  restarts with the Microdisc; `mkdisk.py`'s disk: PASS, the same 24
+  results, and the image downloaded back is byte for byte the host's;
+  Sedoric 3 to its menu in ~4 s (77 sectors), SAVE, NEW, LOAD, RUN, DIR,
+  eject and insert again and LOAD, INIT of a blank disk made by the web
+  API in B: and a SAVE onto it; the Magic X demo from its disk (207
+  sectors) at 50 frames a second; core 1 16% idle, 23-27% while the disk
+  works or the game runs, core 0 4-14%. Left on the card: a clean
+  `sedoric3.dsk` and `demomagx.dsk` (the test disks deleted); the
+  Microdisc switched off again.
 - **Tapes on the Tab5** (2026-11-19): the setup's Tape row (Fast / Real
   time, kept after a reflash); tapes uploaded through the web API; Cobra
   (4 files) at once and running; CSAVE onto a blank tape made by the API,
@@ -417,7 +540,9 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   them all; `bedroomlan_fetch.tsv` how each came: the site times out, the
   Wayback Machine's copies), its TAPES section (206 archives,
   `bedroomlan/TAPES/`; unpacked in `tapes/`: 348 TAP files, no extension
-  in most) and 15 others; oric.org's 347 titles listed
+  in most), its DISKS section (31 archives, `bedroomlan/DISKS/`, the last
+  17 from the Wayback Machine's 2024 captures; unpacked in `disks/`: 29
+  MFM_DISK images) and 15 others; oric.org's 347 titles listed
   (`oricorg/titles.tsv`, nothing downloaded): `TODO.md`, original
   software.
 - `roms/*.rom` here (not in git): `roms/README.md` (MAME's sets or

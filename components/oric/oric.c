@@ -7,8 +7,9 @@
  * RAM and the ROM go through the core's page pointers. Page 3 is the
  * VIA (its 16 registers every 16 bytes) through the bus callbacks; so are
  * writes to $9800-$BFFF (the screens and character sets: video.c decodes
- * the picture again only after one). Writes to $C000-$FFFF are lost (MAP
- * high: no expansion yet).
+ * the picture again only after one). Writes to $C000-$FFFF are lost while
+ * BASIC is there (MAP high); the Microdisc (microdisc.c) claims $0310-$031B
+ * and pages its EPROM and the overlay RAM in.
  */
 #include <string.h>
 #include "oric_internal.h"
@@ -19,31 +20,56 @@ static uint8_t s_sink[256];             /* writes to the ROM go here: lost */
 
 /* ---- Memory map ---- */
 
-static void map_memory(void)
+#ifdef ORIC_HOST_HOOK
+void oric_host_write(uint16_t a, uint8_t v);    /* host builds: ORIC_WATCH */
+int oric_host_watch_page = -1;                  /* ... its page's writes through the callback */
+#endif
+
+uint8_t *oric_sink(void)
 {
-    for (int p = 0; p < 256; p++) {
+    return s_sink;
+}
+
+void oric_map_memory(void)
+{
+    for (int p = 0; p < 0xC0; p++) {
         uint8_t *ram = oric.ram + p * 256;
         if (p == 0x03) {
-            oric.cpu.rd[p] = NULL;      /* the VIA */
+            oric.cpu.rd[p] = NULL;      /* the VIA, the Microdisc */
             oric.cpu.wr[p] = NULL;
-        } else if (p < 0xC0) {
+        } else {
             oric.cpu.rd[p] = ram;
             oric.cpu.wr[p] = p >= 0x98 ? NULL : ram;
-        } else {
+        }
+    }
+#ifdef ORIC_HOST_HOOK
+    if (oric_host_watch_page >= 0 && oric_host_watch_page < 0xC0) {
+        oric.cpu.wr[oric_host_watch_page] = NULL;
+    }
+#endif
+    oric_map_high();
+}
+
+/* $C000-$FFFF: BASIC, or what the Microdisc pages in */
+void oric_map_high(void)
+{
+    oric.basic_in = !microdisc_map();
+    if (oric.basic_in) {
+        for (int p = 0xC0; p < 0x100; p++) {
             oric.cpu.rd[p] = (uint8_t *)oric.rom + (p - 0xC0) * 256;
             oric.cpu.wr[p] = s_sink;
         }
     }
-    tape_map();                         /* the tape routines' pages: traps */
+    tape_map();                         /* the tape routines' pages: traps (BASIC's only) */
 }
 
-#ifdef ORIC_HOST_HOOK
-void oric_host_write(uint16_t a, uint8_t v);    /* host builds: ORIC_WATCH */
-#endif
 
 static uint8_t bus_read(void *ctx, uint16_t a)
 {
     if ((a & 0xFF00) == 0x0300) {
+        if (microdisc_claims(a)) {
+            return microdisc_read(a);
+        }
         tape_sync(oric.cpu.cycles);
         if ((a & 0x0F) == 0x0D) {
             tape_poll();                /* IFR: a loader may be polling CB1 */
@@ -62,6 +88,10 @@ static void bus_write(void *ctx, uint16_t a, uint8_t v)
     oric_host_write(a, v);
 #endif
     if ((a & 0xFF00) == 0x0300) {
+        if (microdisc_claims(a)) {
+            microdisc_write(a, v);
+            return;
+        }
         tape_sync(oric.cpu.cycles);
         via_write(&oric.via, a & 0x0F, v);
         return;
@@ -142,6 +172,7 @@ bool oric_init(const oric_config_t *config)
     oric.cfg = *config;
     oric.ram = config->ram;
     oric.rom = config->rom;
+    oric.disk_rom = config->disk_rom;
     if (!oric_video_init()) {
         return false;
     }
@@ -158,18 +189,21 @@ bool oric_init(const oric_config_t *config)
 }
 
 /* Power off and on. RAM's contents at power-on are unknown (docs 1.5).
- * $0400-$BFFF, which the ROM's RAM test fills and the picture shows
- * meanwhile: the same made-up noise every time (runs that must match),
- * bit 6 set so no attributes show. Pages 0-3 and the overlay RAM: zeros,
- * as MAME has them: the ROM reads page 2's key buffer ($02DF, bit 7 a new
- * key) before it ever writes it, and noise there typed a phantom key
- * after "Ready". The ULA's mode register (unknown too): 50 Hz text.
+ * $0400-$FFFF, which the ROM's RAM test fills and the picture shows
+ * meanwhile, and the overlay RAM: the same made-up noise every time (runs
+ * that must match), bit 6 set so no attributes show. Sedoric's boot sector
+ * sums the overlay RAM: 0 says Sedoric is still there (a warm start) and
+ * it loads 4 sectors of 64, as it did with zeros there (MAME puts $42 at
+ * $E000 for it). Pages 0-3: zeros, as MAME has them: the ROM reads page
+ * 2's key buffer ($02DF, bit 7 a new key) before it ever writes it, and
+ * noise there typed a phantom key after "Ready". The ULA's mode register
+ * (unknown too): 50 Hz text.
  */
 void oric_reset(void)
 {
-    memset(oric.ram, 0, ORIC_RAM_SIZE);
+    memset(oric.ram, 0, 0x0400);
     uint32_t x = 0x2545F491;
-    for (int i = 0x0400; i < 0xC000; i++) {
+    for (int i = 0x0400; i < 0x10000; i++) {
         x ^= x << 13;
         x ^= x >> 17;
         x ^= x << 5;
@@ -187,7 +221,8 @@ void oric_reset(void)
     oric.motor = false;
     tape_reset();
     via_reset(&oric.via);
-    map_memory();
+    microdisc_reset();                  /* (its EPROM paged in: the RESET vector) */
+    oric_map_memory();
     m6502_reset(&oric.cpu);
 }
 
@@ -204,26 +239,36 @@ void oric_nmi(void)
 
 /* ---- The frame ---- */
 
-/* The CPU up to cycle t, stopping at the VIA's timer underflows and the
- * tape's edges on CB1 (an interrupt then reaches the 6502 at the
- * instruction it fell in, if before that one's interrupt poll), and after
- * an instruction that read a tape routine's first byte (tape.c's traps)
+static uint64_t next_event(void)
+{
+    uint64_t ev = oric.via.next_event < tape_edge_at ? oric.via.next_event : tape_edge_at;
+    return fdc_event_at < ev ? fdc_event_at : ev;
+}
+
+/* The CPU up to cycle t, stopping at the VIA's timer underflows, the
+ * tape's edges on CB1 and the disk controller's steps (an interrupt then
+ * reaches the 6502 at the instruction it fell in, if before that one's
+ * interrupt poll), and after an instruction that read a tape routine's
+ * first byte (tape.c's traps)
  */
 static void run_to(uint64_t t)
 {
     m6502_t *c = &oric.cpu;
     while (c->cycles < t) {
-        uint64_t ev = oric.via.next_event < tape_edge_at ? oric.via.next_event : tape_edge_at;
+        uint64_t ev = next_event();
         if (c->cycles >= ev) {
             bool before = c->irq != 0;
             tape_sync(c->cycles);
             if (c->cycles >= oric.via.next_event) {
                 via_update(&oric.via);
             }
+            if (c->cycles >= fdc_event_at) {
+                fdc_update(c->cycles);
+            }
             if (!before && c->irq && ev <= c->poll_cycle) {
                 m6502_repoll(c);
             }
-            ev = oric.via.next_event < tape_edge_at ? oric.via.next_event : tape_edge_at;
+            ev = next_event();
         }
         uint64_t u = ev < t ? ev : t;
         c->until = u > c->cycles ? u : c->cycles + 1;
@@ -261,6 +306,7 @@ void oric_run_frame(void)
     oric_video_frame_end();
     oric_keyboard_frame();
     tape_frame_end();
+    fdc_frame_end();
 }
 
 /* ---- Status ---- */
@@ -282,4 +328,6 @@ void oric_get_status(oric_status_t *s)
     s->timer1 = oric.via.t1_latch;
     s->timer1_irq = (oric.via.ier & 0x40) != 0;
     psg_get_regs(s->ay);
+    s->microdisc = oric.disk_rom != NULL;
+    s->disk_control = microdisc_control();
 }

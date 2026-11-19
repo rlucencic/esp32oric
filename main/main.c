@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
@@ -25,7 +26,7 @@ static const char *const model_names[] = { "Atmos", "Oric-1", "" };
 static const char *const model_full[] = { "Oric Atmos (BASIC 1.1)", "Oric-1 (BASIC 1.0)" };
 
 static oric_config_t s_cfg;
-static uint8_t *s_rom;
+static uint8_t *s_rom, *s_disk_rom;
 
 /* ---- Memory: everything at power-on, before the screen, WiFi and
  * Bluetooth fragment PSRAM
@@ -34,70 +35,152 @@ static void reserve_memory(void)
 {
     settings_load();
     s_rom = heap_caps_malloc(ORIC_ROM_SIZE, MALLOC_CAP_SPIRAM);
+    s_disk_rom = heap_caps_malloc(ORIC_DISK_ROM_SIZE, MALLOC_CAP_SPIRAM);
     s_cfg.ram = heap_caps_malloc(ORIC_RAM_SIZE, MALLOC_CAP_SPIRAM);
 }
 
 static void storage(bool sd_card)
 {
-    emu_set_drive_info(sd_card ? "Tapes (.TAP) on the SD card" : "No SD card: no tapes");
+    emu_set_drive_info(sd_card ? "Tapes (.TAP) and disks (.DSK) on the SD card" : "No SD card: no tapes or disks");
 }
 
-/* ---- The tape drive: TAP files in the SD card's oric/ folder, listed,
- * uploaded and downloaded by the web page; the core plays them (tape.c).
- * A blank tape is an empty .TAP: CSAVE puts its files on the end of any.
+/* ---- The drives: the tape and the Microdisc's A and B, their images in
+ * the SD card's oric/ folder, listed, uploaded and downloaded by the web
+ * page. The core plays the tape (tape.c) and reads and writes the disks
+ * (wd1793.c). A blank tape is an empty .TAP: CSAVE puts its files on the
+ * end of any; a blank disk is an MFM_DISK with no track formatted
+ * (Sedoric's INIT formats it). Drive 1 of the web API is still the tape.
  */
 
-#define BLANK_TAPE  1                   /* the "size" of a blank tape */
+enum { DRIVE_TAPE, DRIVE_A, DRIVE_B, DRIVES };
 
-static bool tape_insert(int drive, const char *path)
+#define BLANK_TAPE      1               /* the "size" of a blank tape */
+#define DSK_BYTES(t)    (256 + 6400 * 2 * (t))  /* two sides of t tracks */
+
+static bool has_ext(const char *name, const char *ext)
 {
-    return oric_tape_insert(path);
+    size_t n = strlen(name), e = strlen(ext);
+    return n >= e && strcasecmp(name + n - e, ext) == 0;
 }
 
-static void tape_eject(int drive)
+static bool accepts(int drive, const char *name)
 {
-    oric_tape_eject();
+    return drive == DRIVE_TAPE ? !has_ext(name, ".dsk") : has_ext(name, ".dsk");
 }
 
-static const char *tape_path(int drive)
+static bool drive_insert(int drive, const char *path)
 {
-    return oric_tape_path();
+    if (!accepts(drive, path)) {
+        return false;
+    }
+    return drive == DRIVE_TAPE ? oric_tape_insert(path) : oric_disk_insert(drive - DRIVE_A, path);
 }
 
-static bool tape_write_protected(int drive)
+static void drive_eject(int drive)
 {
-    return false;
+    if (drive == DRIVE_TAPE) {
+        oric_tape_eject();
+    } else {
+        oric_disk_eject(drive - DRIVE_A);
+    }
 }
 
-static bool tape_create(const char *path, uint32_t bytes)
+static const char *drive_path(int drive)
 {
-    return oric_tape_create(path);
+    return drive == DRIVE_TAPE ? oric_tape_path() : oric_disk_path(drive - DRIVE_A);
 }
 
-static const char *const extensions[] = { ".tap", NULL };
-static const char *const drive_names[] = { "Tape" };
-static const disks_size_t sizes[] = { { BLANK_TAPE, "Blank tape (.TAP)" } };
+static bool drive_write_protected(int drive)
+{
+    return drive != DRIVE_TAPE && oric_disk_protected(drive - DRIVE_A);
+}
+
+static bool drive_create(const char *path, uint32_t bytes)
+{
+    if (bytes == BLANK_TAPE) {
+        return oric_tape_create(path);
+    }
+    return oric_disk_create(path, 2, (int)((bytes - 256) / (6400 * 2)));
+}
+
+static uint32_t default_size(int drive)
+{
+    return drive == DRIVE_TAPE ? BLANK_TAPE : DSK_BYTES(42);
+}
+
+static const char *extension_for(uint32_t bytes)
+{
+    return bytes == BLANK_TAPE ? ".tap" : ".dsk";
+}
+
+/* A disk in A or B while the Microdisc is off: offered with a restart */
+static const char *offer(int drive)
+{
+    if (drive == DRIVE_TAPE || settings.microdisc || oric_disk_path(drive - DRIVE_A) == NULL) {
+        return NULL;
+    }
+    return "Disks want the Microdisc: switch it on and restart the Oric (its EPROM boots the disk in A)";
+}
+
+static void take_offer(int drive)
+{
+    settings.microdisc = 1;
+    settings_save();
+}
+
+static const char *const extensions[] = { ".tap", ".dsk", NULL };
+static const char *const drive_names[] = { "Tape", "A:", "B:" };
+static const disks_size_t sizes[] = {
+    { DSK_BYTES(42), "Blank disk, 2 sides of 42 tracks (.DSK)" },
+    { DSK_BYTES(80), "Blank disk, 2 sides of 80 tracks (.DSK)" },
+    { BLANK_TAPE, "Blank tape (.TAP)" },
+};
 
 static const disks_config_t disks = {
     .folder = "oric",
     .extensions = extensions,
-    .description = "Tapes (.TAP)",
-    .title = "Tapes",
-    .button = "Tapes",
+    .description = "Tapes (.TAP) and disks (.DSK)",
+    .title = "Tapes and disks",
+    .button = "Media",
     .nvs_namespace = "oricdisks",
-    .drives = 1,
+    .drives = DRIVES,
     .drive_names = drive_names,
-    .new_prefix = "TAPE",
-    .new_extension = ".tap",
+    .new_prefix = "BLANK",
+    .new_extension = ".dsk",
     .sizes = sizes,
-    .size_count = 1,
+    .size_count = sizeof(sizes) / sizeof(sizes[0]),
     .max_upload = 4 * 1024 * 1024,
-    .insert = tape_insert,
-    .eject = tape_eject,
-    .path = tape_path,
-    .write_protected = tape_write_protected,
-    .create = tape_create,
+    .insert = drive_insert,
+    .eject = drive_eject,
+    .path = drive_path,
+    .write_protected = drive_write_protected,
+    .create = drive_create,
+    .accepts = accepts,
+    .default_size = default_size,
+    .extension_for = extension_for,
+    .offer = offer,
+    .take_offer = take_offer,
 };
+
+/* Disk writes go to the SD card between frames, once nothing has been
+ * written for two seconds (the core keeps the changed tracks till then)
+ */
+static void flush(void *arg)
+{
+    oric_disk_flush();
+}
+
+static void every_second(void)
+{
+    static int dirty_for;
+    if (oric_disk_dirty()) {
+        if (++dirty_for >= 2 && emu_paused(flush, NULL)) {
+            dirty_for = 0;
+        }
+    } else {
+        dirty_for = 0;
+    }
+}
 
 /* ---- Starting ---- */
 
@@ -117,12 +200,20 @@ static bool start(void)
     }
     s_cfg.model = settings.model ? ORIC_1 : ORIC_ATMOS;
     s_cfg.rom = s_rom;
+    s_cfg.disk_rom = NULL;
+    if (settings.microdisc) {
+        if (s_disk_rom == NULL || !rom_store_load(ROM_MICRODISC, s_disk_rom)) {
+            emu_set_message("No Microdisc EPROM: put microdis.rom into roms/ and flash with idf.py flash.");
+            return false;
+        }
+        s_cfg.disk_rom = s_disk_rom;
+    }
     oric_tape_fast(settings.tape_fast);
     if (!oric_init(&s_cfg)) {
         emu_set_message("The Oric could not be set up: see the log.");
         return false;
     }
-    ESP_LOGI(TAG, "%s", model_full[settings.model]);
+    ESP_LOGI(TAG, "%s%s", model_full[settings.model], settings.microdisc ? " with a Microdisc" : "");
     return true;
 }
 
@@ -162,9 +253,25 @@ static void tape_set(int i)
     oric_tape_fast(settings.tape_fast);
 }
 
+static const char *const microdisc_names[] = { "Off", "On", "" };
+
+static int microdisc_get(void)
+{
+    return settings.microdisc;
+}
+
+static void microdisc_set(int i)
+{
+    if (i >= 0 && i <= 1) {
+        settings.microdisc = i;
+        settings_save();
+    }
+}
+
 static const emu_choice_t choices[] = {
     { "Model", model_names, model_get, model_set, false },
     { "Tape", tape_names, tape_get, tape_set, true },
+    { "Microdisc", microdisc_names, microdisc_get, microdisc_set, false },
 };
 
 /* ---- Status ---- */
@@ -205,6 +312,30 @@ static void tape_text(char *text, size_t len, const oric_tape_status_t *t)
              t->start, t->last, t->autorun ? ", AUTO" : "");
 }
 
+/* A disk: its size, where the head is */
+static void disk_text(char *text, size_t len, const oric_disk_status_t *d, bool microdisc)
+{
+    int n = snprintf(text, len, "%d side%s of %d tracks%s; the head on track %d", d->sides, d->sides > 1 ? "s" : "",
+                     d->tracks, d->protect ? ", write protected" : "", d->cyl);
+    if (d->selected && microdisc) {
+        snprintf(text + n, len - n, ", side %d%s", d->side, d->motor ? ", turning" : "");
+    }
+    if (!microdisc) {
+        snprintf(text + n, len - n, " (the Microdisc is off)");
+    }
+}
+
+/* The Microdisc: its controller, the drive, what $C000-$FFFF holds */
+static void microdisc_text(char *text, size_t len, uint8_t control, const oric_fdc_status_t *f)
+{
+    const char *paged = (control & 0x02) ? "BASIC" : (control & 0x80) ? "overlay RAM" : "overlay RAM, the EPROM at #E000";
+    snprintf(text, len, "WD1793 %s #%02X, track %u, sector %u, status #%02X; drive %c side %d%s; "
+             "#C000-#FFFF: %s; %lu sectors read, %lu written",
+             f->busy ? "busy with" : "done with", f->command, f->track, f->sector, f->status, 'A' + f->drive,
+             f->side, f->motor ? ", motor on" : "", paged, (unsigned long)f->sectors_read,
+             (unsigned long)f->sectors_written);
+}
+
 static void status(emu_json_t *j, int section)
 {
     oric_status_t s;
@@ -217,8 +348,18 @@ static void status(emu_json_t *j, int section)
         if (t.inserted) {
             tape_text(text, sizeof(text), &t);
         }
-        emu_json_drive(j, drive_names[0], disks_name(0), false, s.motor, t.loaded, t.saved,
+        emu_json_drive(j, drive_names[DRIVE_TAPE], disks_name(DRIVE_TAPE), false, s.motor, t.loaded, t.saved,
                        t.inserted ? text : NULL);
+        /* the disks' light: the controller's head load (it runs the motors) on the drive selected */
+        for (int d = 0; d < 2; d++) {
+            oric_disk_status_t ds;
+            oric_disk_status(d, &ds);
+            if (ds.inserted) {
+                disk_text(text, sizeof(text), &ds, s.microdisc);
+            }
+            emu_json_drive(j, drive_names[DRIVE_A + d], disks_name(DRIVE_A + d), ds.protect,
+                           s.microdisc && ds.selected && ds.motor, ds.reads, ds.writes, ds.inserted ? text : NULL);
+        }
         return;
     }
     emu_json_row(j, "System", s.model == ORIC_1 ? "Oric-1: a 6502A at 1 MHz, 64 KB RAM, the ULA, a 6522, an AY-3-8912" :
@@ -247,7 +388,14 @@ static void status(emu_json_t *j, int section)
              !t.fast ? "loads in real time" : t.traps ? "CLOAD and CSAVE at once" : "real time (not BASIC 1.1)",
              t.write_failed ? "; a CSAVE couldn't be written to the card" : "");
     emu_json_row(j, "Cassette", text);
-    emu_json_row(j, "Expansions", "None (the Microdisc to come)");
+    if (s.microdisc) {
+        oric_fdc_status_t f;
+        oric_fdc_status(&f);
+        microdisc_text(text, sizeof(text), s.disk_control, &f);
+        emu_json_row(j, "Microdisc", text);
+    } else {
+        emu_json_row(j, "Expansions", "None (the Microdisc is off: the setup's Microdisc row)");
+    }
 }
 
 /* ---- Console ---- */
@@ -258,10 +406,14 @@ static void console_info(char *buf, size_t len)
     oric_get_status(&s);
     oric_tape_status_t t;
     oric_tape_status(&t);
-    snprintf(buf, len, "frames %lu PC %04X A %02X X %02X Y %02X S %02X P %02X %s %s tape %lu/%lu%s%s",
+    oric_fdc_status_t f;
+    oric_fdc_status(&f);
+    snprintf(buf, len, "frames %lu PC %04X A %02X X %02X Y %02X S %02X P %02X %s %s tape %lu/%lu%s%s"
+             " disk %s ctl %02X fdc %02X/%02X t%u s%u %c%d%s",
              (unsigned long)s.frames, s.pc, s.a, s.x, s.y, s.s, s.p, s.hires ? "hires" : "text",
              s.hz50 ? "50Hz" : "60Hz", (unsigned long)t.pos, (unsigned long)t.size, s.motor ? " motor" : "",
-             t.playing ? " playing" : "");
+             t.playing ? " playing" : "", s.microdisc ? "on" : "off", s.disk_control, f.command, f.status,
+             f.track, f.sector, 'A' + f.drive, f.side, f.busy ? " busy" : "");
 }
 
 static void rewind_tape(void *arg)
@@ -346,6 +498,7 @@ static const emu_machine_t machine = {
     .choices = choices,
     .choice_count = sizeof(choices) / sizeof(choices[0]),
     .disks = &disks,
+    .every_second = every_second,
     .status = status,
     .console_info = console_info,
     .console_command = console_command,

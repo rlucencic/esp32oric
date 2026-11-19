@@ -43,7 +43,7 @@
 enum { MODE_50HZ = 0x02, MODE_HIRES = 0x04 };
 
 /* The 6502's IRQ line: a bit a source */
-enum { IRQ_VIA = 0x01 };
+enum { IRQ_VIA = 0x01, IRQ_FDC = 0x02 };
 
 typedef struct {
     oric_config_t cfg;
@@ -51,6 +51,8 @@ typedef struct {
     via_t via;
     uint8_t *ram;
     const uint8_t *rom;
+    const uint8_t *disk_rom;            /* the Microdisc's EPROM (NULL: no Microdisc) */
+    bool basic_in;                      /* $C000-$FFFF reads BASIC (the tape's traps) */
 
     uint64_t frame_start;               /* the cycle line 0 began at */
     int line;                           /* the line being run */
@@ -98,8 +100,33 @@ bool oric_keyboard_sense(uint8_t row, uint8_t columns);   /* PB3 */
 void oric_keyboard_reset(void);
 void oric_keyboard_frame(void);
 
-/* oric.c: a write as the 6502 makes it (the screens' flag, page 3, the ROM) */
+/* oric.c: a write as the 6502 makes it (the screens' flag, page 3, the ROM);
+ * the memory map again (the Microdisc's paging); the page writes are lost in
+ */
 void oric_write(uint16_t a, uint8_t v);
+void oric_map_memory(void);
+void oric_map_high(void);               /* $C000-$FFFF only */
+uint8_t *oric_sink(void);
+
+/* microdisc.c: the Microdisc's page 3 ($0310-$031B), paging, IRQ */
+bool microdisc_claims(uint16_t a);
+uint8_t microdisc_read(uint16_t a);
+void microdisc_write(uint16_t a, uint8_t v);
+bool microdisc_map(void);               /* false: BASIC at $C000-$FFFF */
+void microdisc_irq(void);               /* INTRQ or the enable changed */
+uint8_t microdisc_control(void);
+void microdisc_reset(void);
+
+/* wd1793.c: the floppy controller and its drives */
+extern uint64_t fdc_event_at;           /* the controller's next step (UINT64_MAX: none) */
+void fdc_update(uint64_t now);
+uint8_t fdc_read(int reg);
+void fdc_write(int reg, uint8_t v);
+bool fdc_intrq(void);
+bool fdc_drq(void);
+void fdc_select(int drive, int side);
+void fdc_frame_end(void);
+void fdc_reset(void);
 
 /* tape.c: the cassette */
 extern uint64_t tape_edge_at;           /* the tape's next edge on CB1 (UINT64_MAX: none) */

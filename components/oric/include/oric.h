@@ -14,7 +14,7 @@
 #include <stdint.h>
 
 #define ORIC_ROM_SIZE           (16 * 1024)     /* BASIC, $C000-$FFFF */
-#define ORIC_DISK_ROM_SIZE      (8 * 1024)      /* the Microdisc's EPROM (to come) */
+#define ORIC_DISK_ROM_SIZE      (8 * 1024)      /* the Microdisc's EPROM, $E000-$FFFF */
 #define ORIC_RAM_SIZE           (64 * 1024)
 
 /* The picture: 40 cells of 6 pixels, 224 lines (28 text rows of 8) */
@@ -30,6 +30,7 @@ typedef enum { ORIC_ATMOS, ORIC_1 } oric_model_t;
 typedef struct {
     oric_model_t model;
     const uint8_t *rom;         /* ORIC_ROM_SIZE bytes: BASIC 1.1 (Atmos) or 1.0 (Oric-1) */
+    const uint8_t *disk_rom;    /* ORIC_DISK_ROM_SIZE bytes: the Microdisc's EPROM; NULL: no Microdisc */
     uint8_t *ram;               /* ORIC_RAM_SIZE bytes */
 } oric_config_t;
 
@@ -100,6 +101,44 @@ typedef struct {
 
 void oric_tape_status(oric_tape_status_t *s);
 
+/* ---- The Microdisc: MFM_DISK images (.dsk) ----
+ *
+ * Drives 0-3 (A-D); an image is read whole and written back in place,
+ * its changed tracks at oric_disk_flush() (and at eject). A file that
+ * can't be written is a write-protected disk. Insert, eject and flush not
+ * while oric_run_frame() runs; the status from any task.
+ */
+#define ORIC_DRIVES 4
+
+bool oric_disk_insert(int drive, const char *path);
+void oric_disk_eject(int drive);
+const char *oric_disk_path(int drive);     /* NULL when empty */
+bool oric_disk_protected(int drive);
+bool oric_disk_create(const char *path, int sides, int tracks);   /* unformatted */
+bool oric_disk_dirty(void);                 /* tracks changed since the last flush */
+void oric_disk_flush(void);
+
+typedef struct {
+    bool inserted, protect, dirty;
+    int sides, tracks;
+    int cyl;                    /* the head */
+    bool selected;              /* the control register's drive */
+    int side;                   /* ... its side */
+    bool motor;                 /* the controller's HLD (all drives' motors) */
+    uint32_t reads, writes;     /* sectors */
+} oric_disk_status_t;
+
+void oric_disk_status(int drive, oric_disk_status_t *s);
+
+typedef struct {
+    bool busy, intrq, motor;
+    uint8_t command, status, track, sector, data;
+    int drive, side;
+    uint32_t sectors_read, sectors_written;
+} oric_fdc_status_t;
+
+void oric_fdc_status(oric_fdc_status_t *s);
+
 /* ---- Sound ---- */
 void oric_audio_enable(bool on);
 int oric_audio_render(int16_t *dst, int frames);
@@ -118,6 +157,8 @@ typedef struct {
     uint16_t timer1;            /* the VIA's timer 1 latch (the ROM's 10000: 100 Hz) */
     bool timer1_irq;            /* ... its interrupt enabled */
     uint8_t ay[16];             /* the AY's registers */
+    bool microdisc;             /* one is attached */
+    uint8_t disk_control;       /* its control register */
 } oric_status_t;
 
 void oric_get_status(oric_status_t *s);
