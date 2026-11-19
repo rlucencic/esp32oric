@@ -16,6 +16,7 @@
  * short: esp32ql's lessons)
  */
 #define ORIC_SLOW_ALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define ORIC_SLOW_REALLOC(p, n) heap_caps_realloc((p), (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 #define ORIC_HOT        IRAM_ATTR
 #else
 #include <stdio.h>
@@ -23,6 +24,7 @@
 #define ORIC_LOGI(...)  do { printf("oric: " __VA_ARGS__); printf("\n"); } while (0)
 #define ORIC_LOGW(...)  do { printf("oric: warning: " __VA_ARGS__); printf("\n"); } while (0)
 #define ORIC_SLOW_ALLOC(n) calloc(1, (n))
+#define ORIC_SLOW_REALLOC(p, n) realloc((p), (n))
 #define ORIC_HOT
 #endif
 
@@ -64,7 +66,8 @@ typedef struct {
      */
     uint8_t screen_touched;
 
-    uint8_t port_b;                     /* the VIA's port B pins as last seen (PB4 strobe, PB6 motor) */
+    uint8_t port_b;                     /* the VIA's port B pins as last seen (PB4 strobe) */
+    bool motor;                         /* PB6 an output and high: the cassette relay */
     volatile bool nmi_request;          /* the button underneath, from another task */
 } oric_t;
 
@@ -94,3 +97,24 @@ void psg_get_regs(uint8_t regs[16]);
 bool oric_keyboard_sense(uint8_t row, uint8_t columns);   /* PB3 */
 void oric_keyboard_reset(void);
 void oric_keyboard_frame(void);
+
+/* oric.c: a write as the 6502 makes it (the screens' flag, page 3, the ROM) */
+void oric_write(uint16_t a, uint8_t v);
+
+/* tape.c: the cassette */
+extern uint64_t tape_edge_at;           /* the tape's next edge on CB1 (UINT64_MAX: none) */
+void tape_advance(uint64_t now);        /* the edges up to now */
+static inline void tape_sync(uint64_t now)
+{
+    if (now >= tape_edge_at) {
+        tape_advance(now);
+    }
+}
+void tape_map(void);                    /* the ROM pages with the traps (after the memory map) */
+uint8_t tape_rom_read(uint16_t a);      /* a read in those pages */
+bool tape_trap(void);                   /* after a run: a routine the CPU entered, done */
+void tape_motor(bool on);
+void tape_poll(void);                   /* the 6502 read IFR */
+void tape_frame_end(void);
+void tape_reset(void);
+void tape_nmi(void);

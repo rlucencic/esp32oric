@@ -20,6 +20,10 @@
  *   ORIC_AY=1               with the registers, the AY's
  *   ORIC_WATCH=<addr>[:<frame>]  a CPU write to addr: the instructions before
  *   ORIC_DASM=<addr>:<count> disassemble there and exit
+ *   ORIC_TAPE=<file.tap>    a tape in (CSAVE writes onto its end: use a copy)
+ *   ORIC_NEWTAPE=<file.tap> a blank tape made and put in
+ *   ORIC_REALTIME=1         tapes load in real time (no traps)
+ *   ORIC_TAPE_LOG=1         the tape's state each second
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -270,6 +274,17 @@ int main(int argc, char **argv)
             oric.cpu.wr[a >> 8] = NULL;     /* its page's writes through the bus callback */
         }
     }
+    oric_tape_fast(!getenv("ORIC_REALTIME"));
+    if (getenv("ORIC_NEWTAPE") && !oric_tape_create(getenv("ORIC_NEWTAPE"))) {
+        perror(getenv("ORIC_NEWTAPE"));
+        return 1;
+    }
+    const char *tape = getenv("ORIC_NEWTAPE") ? getenv("ORIC_NEWTAPE") : getenv("ORIC_TAPE");
+    if (tape && !oric_tape_insert(tape)) {
+        fprintf(stderr, "%s: can't put it in\n", tape);
+        return 1;
+    }
+    bool tape_log = getenv("ORIC_TAPE_LOG") != NULL;
     int log_every = getenv("ORIC_LOG") ? atoi(getenv("ORIC_LOG")) : 0;
     int shots = getenv("ORIC_SHOTS") ? atoi(getenv("ORIC_SHOTS")) : 0;
     long nmi_at = getenv("ORIC_NMI") ? atol(getenv("ORIC_NMI")) : -1;
@@ -294,6 +309,13 @@ int main(int argc, char **argv)
             }
         } else {
             oric_audio_enable(false);
+        }
+        if (tape_log && s_frame % 50 == 0) {
+            oric_tape_status_t ts;
+            oric_tape_status(&ts);
+            printf("frame %u: tape %u/%u file %d/%d \"%s\" motor %d playing %d%s loaded %u saved %u PC %04X\n",
+                   s_frame, ts.pos, ts.size, ts.file, ts.files, ts.name, ts.motor, ts.playing,
+                   ts.slow ? " (slow)" : "", ts.loaded, ts.saved, oric.cpu.pc);
         }
         if (log_every && s_frame % log_every == 0) {
             printf("frame %u:", s_frame);
@@ -325,6 +347,9 @@ int main(int argc, char **argv)
     }
     if (getenv("ORIC_TEXT")) {
         print_text();
+    }
+    if (tape) {
+        oric_tape_eject();              /* (writes what CSAVE left) */
     }
     printf("after %u frames: PC %04X\n", frames, oric.cpu.pc);
     write_ppm(out);

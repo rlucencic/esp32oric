@@ -10,13 +10,20 @@
  * every 30 ms, so a key is seen twice and its release once). Letters follow
  * BASIC's CAPS ($020C, on at reset): with it on a capital is the plain key
  * and a small letter isn't typed as such (the ROM makes every letter a
- * capital then: CTRL-T turns CAPS off).
+ * capital then: CTRL-T turns CAPS off). After a RETURN the next key waits
+ * until BASIC waits for one: it empties the key buffer ($02DF) on its way
+ * back to "Ready" ($C993), and a key typed while a command still ran was
+ * lost. BASIC 1.1's wait is its key loop's PC at a frame's end (RET_MIN to
+ * RET_MAX frames after); other ROMs get RET_OTHER frames.
  */
 #include <string.h>
 #include "oric_internal.h"
 
 #define HOLD_FRAMES     3               /* a typed key down: two scans */
 #define GAP_FRAMES      2               /* ... then up: a scan */
+#define RET_MIN         3               /* after a RETURN: BASIC waits for a key again */
+#define RET_MAX         250
+#define RET_OTHER       25
 
 enum { PLAIN, SHIFT, CTRL };
 
@@ -31,6 +38,7 @@ static int s_pos, s_len;
 static int s_t;                         /* frames into the character being typed */
 static int s_lead;                      /* 1: its modifier went down a frame before it */
 static typed_t s_char;
+static int s_after_return;              /* frames since a typed RETURN was let go (0: none) */
 
 /* Every character the Atmos's keys make (its key caps: docs 5.1) */
 static bool for_char(char ch, typed_t *t)
@@ -129,6 +137,22 @@ void oric_keyboard_reset(void)
 {
     memset(s_typed, 0, sizeof(s_typed));
     s_pos = s_len = s_t = 0;
+    s_after_return = 0;
+}
+
+/* BASIC 1.1 waits for a key: its line editor's loop ($C5E8: JSR $023B,
+ * BPL back) and the routine there ($EB78: LDA $02DF, BPL to its RTS)
+ */
+static bool basic_waits(void)
+{
+    static const uint8_t loop[] = { 0xAD, 0xDF, 0x02, 0x10 };    /* $EB78 */
+    if (memcmp(oric.rom + (0xEB78 - 0xC000), loop, sizeof(loop)) != 0) {
+        return s_after_return >= RET_OTHER;
+    }
+    uint16_t pc = oric.cpu.pc;
+    return (s_after_return >= RET_MIN && ((pc >= 0xC5E8 && pc <= 0xC5EB) || (pc >= 0xEB78 && pc <= 0xEB88) ||
+                                          (pc >= 0x023B && pc <= 0x023D))) ||
+           s_after_return >= RET_MAX;
 }
 
 bool oric_type(const char *text)
@@ -158,6 +182,13 @@ void oric_keyboard_frame(void)
     if (s_pos >= s_len) {
         return;
     }
+    if (s_after_return) {
+        if (!basic_waits()) {
+            s_after_return++;
+            return;
+        }
+        s_after_return = 0;
+    }
     if (s_t == 0) {
         while (s_pos < s_len && !for_char(s_text[s_pos], &s_char)) {
             s_pos++;                    /* nothing types it */
@@ -180,6 +211,9 @@ void oric_keyboard_frame(void)
     }
     if (++s_t >= s_lead + HOLD_FRAMES + GAP_FRAMES) {
         s_t = 0;
+        if (s_char.key == ORIC_KEY_RETURN) {
+            s_after_return = 1;
+        }
         s_pos++;
     }
 }

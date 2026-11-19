@@ -2,14 +2,17 @@
 
 An Oric Atmos emulator for the Makerfabs MaTouch ESP32-S3 7" and the
 M5Stack Tab5 (ESP32-P4): a 6502A at 1 MHz, 64 KB of RAM, the ULA's
-serial-attribute text and hires screens, a 6522 VIA, an AY-3-8912 and BASIC
-1.1, with tapes and the Oric Microdisc to follow.
+serial-attribute text and hires screens, a 6522 VIA, an AY-3-8912, BASIC
+1.1 and tapes, with the Oric Microdisc to follow.
 
 **Early development.** On the Tab5 (and in a PC build, `make -C
 components/oric/host run`) it boots BASIC 1.1 (or the Oric-1's 1.0) to
 "Ready" and runs typed programs, the text and hires screens with their
-serial attributes and the AY's sound; tapes and the Microdisc are still to
-come, and the MaTouch is built but not yet tried. The hardware research is in
+serial attributes and the AY's sound. Tapes are `.TAP` files on the SD
+card: CLOAD and CSAVE at once (BASIC 1.1's tape routines trapped), or in
+real time through the VIA as on the real machine; games with loaders of
+their own get the tape in real time. The Microdisc is still to come, and the
+MaTouch is built but not yet tried. The hardware research is in
 `docs/oric-hardware.md`; `TODO.md` has the plan, in order; `CLAUDE.md` the
 state of things.
 

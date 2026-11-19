@@ -68,6 +68,38 @@ enum {
 void oric_key(int key, bool down);      /* from any task */
 bool oric_type(const char *text);       /* \n is RETURN; false while still typing */
 
+/* ---- Cassette: TAP files ----
+ *
+ * The tape plays on CB1 while the motor runs. Fast (the default, BASIC
+ * 1.1): CLOAD and CSAVE through the ROM's tape routines at once, a CSAVE
+ * onto the tape's end (the file written when the motor stops); a loader of
+ * its own gets the tape in real time. Insert, eject, create and rewind not
+ * while oric_run_frame() runs; oric_tape_fast() and the status from any
+ * task.
+ */
+bool oric_tape_insert(const char *path);    /* any file: an empty one is a blank tape */
+void oric_tape_eject(void);
+const char *oric_tape_path(void);           /* NULL when empty */
+bool oric_tape_create(const char *path);    /* an empty .TAP */
+void oric_tape_rewind(void);
+void oric_tape_fast(bool fast);             /* false: loads in real time too */
+
+typedef struct {
+    bool inserted, fast;
+    bool traps;                 /* the ROM has 1.1's tape routines (fast works) */
+    bool motor, playing, slow;  /* the relay; the tape on CB1 (300 baud) */
+    uint32_t pos, size;         /* the head's offset in the file, its size */
+    int file, files;            /* the file at the head (0 ..; files: past the last) */
+    char name[17];              /* ... its name, type, autorun, addresses */
+    uint8_t type;
+    bool autorun;
+    uint16_t start, last;
+    uint32_t loaded, saved;     /* files loaded, saved at once */
+    bool write_failed;
+} oric_tape_status_t;
+
+void oric_tape_status(oric_tape_status_t *s);
+
 /* ---- Sound ---- */
 void oric_audio_enable(bool on);
 int oric_audio_render(int16_t *dst, int frames);

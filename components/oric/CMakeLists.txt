@@ -4,6 +4,7 @@ idf_component_register(SRCS "oric.c"
                             "video.c"
                             "psg.c"
                             "keyboard.c"
+                            "tape.c"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "."
                        REQUIRES m6502)

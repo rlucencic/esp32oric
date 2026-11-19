@@ -15,9 +15,11 @@ yet.** Done: the hardware research (`docs/oric-hardware.md`), the ROMs
 (local, not in git), the core (`components/oric`: BASIC 1.1 to "Ready",
 typing, text and hires with every attribute, the AY's sound, NMI, 50/60
 Hz; BASIC 1.0 for the Oric-1), its host build (`make -C
-components/oric/host run`, `check`) and the board side (`main/`: the
+components/oric/host run`, `check`), the board side (`main/`: the
 setup's Model row, keyboards, ROMs from flash or the card, status, console;
-checked on the Tab5). Next: `TODO.md`.
+checked on the Tab5) and tapes (TAP files, CLOAD and CSAVE at once or in
+real time, 2026-11-19: 348 originals on the host, the Tab5). Next:
+`TODO.md`.
 
 The board side (tasks, LCD, touch, SD, WiFi, BLE, setup screen, web page,
 console) and the 6502 core (`m6502`) are the shared library in
@@ -54,11 +56,11 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   `basic11b.rom` slot 0, `basic10.rom` slot 1, `microdis.rom` slot 2; a
   file of the same name in the SD card's `oric/roms` overrides one (any
   case; `roms/README.md`: where they come from). NVS namespace `oric`
-  (`model`: 0 Atmos, 1 Oric-1; the Microdisc's to come), drives
-  `oricdisks`. mDNS `oric-atmos.local`. The SD card's `oric/` folder:
-  `.tap` tapes (listed and uploaded, they don't play yet), later `.dsk`
-  (MFM_DISK) disks. The boards are shared with the other projects: after
-  another one, a full `flash`.
+  (`model`: 0 Atmos, 1 Oric-1; `tape_fast`: 1 fast, 0 real time; the
+  Microdisc's to come), drives `oricdisks`. mDNS `oric-atmos.local`. The SD
+  card's `oric/` folder: `.tap` tapes (blank ones `TAPEnnnn.tap`, empty
+  files), later `.dsk` (MFM_DISK) disks. The boards are shared with the
+  other projects: after another one, a full `flash`.
 - **The Tab5 after flashing (2026-11-19)**: the RTS hard reset at the
   flash's end (and `emu_console.py reset`) left it in the ROM's download
   mode ("boot:0x204 ... waiting for download", nothing on the console).
@@ -68,8 +70,18 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - The MaTouch: its UART port, not native USB (the speaker's lines); opening
   that port resets the board.
 - `../esp32emu/tools/emu_console.py PORT log N | lcd F.png | send "cmd" |
-  info` with the IDF venv's Python (`-I`). Start on the setup screen: `t
-  1065 637` (Tab5), `t 850 532` (MaTouch).
+  info` with the IDF venv's Python (`-I`; `lcd` wants macOS's `sips`: on
+  Linux a Pillow stand-in named `sips` first on PATH). Start on the setup
+  screen: `t 1065 637` (Tab5), `t 850 532` (MaTouch). `log` resets the
+  Tab5 (its boot is in the log); `info` and `send` don't.
+- The web API (`curl http://oric-atmos.local/...`; this PC resolves the
+  name to IPv6 only: the board's IPv4 address works): `curl -T game.tap
+  .../disks/game.tap` uploads, `curl -X PUT --data "game.tap"
+  .../api/drive/1` puts it in, `curl -X POST ".../api/new?size=1"` makes a
+  blank tape, `.../api/status` (`board.load`: the cores' busy %).
+  `/api/status` got no answer before the machine's first start (the setup
+  screen up after a boot) on 2026-11-19, the other requests did; after
+  Start it answers (esp32emu's, not looked into yet).
 
 ## Layout
 
@@ -81,12 +93,15 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/via.c`, `via.h` | The 6522, from esp32cbm's (the 1541's; the user's own MIT code): ports with their control lines, timer 1 (one-shot / free running, PB7), timer 2, IFR/IER; timers lazy (`via_update()` counts up to the CPU's cycle; the CPU's run ends at the next underflow through `m6502_lower_until()`) |
 | `components/oric/psg.c` | The AY-3-8912: registers through BDIR/BC1, port A (the keyboard's columns), tones, noise, envelope, the mono mix through a capacitor into the sound ring (31250 Hz) |
 | `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
+| `components/oric/tape.c` | The cassette: TAP files indexed, played as CB1 edges while the motor runs and something reads them, BASIC 1.1's tape routines trapped (CLOAD and CSAVE at once), saves onto the tape's end |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
 | `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
-| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model row, the Tape drive (`.tap` names only, for now), status rows, console `k`/`K`/`T`/`N` |
+| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model and Tape rows, the Tape drive (the core's tape, blank tapes), status rows, console `k`/`K`/`T`/`N`/`W` |
 | `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
 | `main/rom_store.c` | The ROMs: a slot of `oric_roms` (mapped, copied, unmapped), the SD card's `oric/roms` over it |
-| `main/settings.c` | NVS `oric`: the model |
+| `main/settings.c` | NVS `oric`: the model, fast tapes |
+| `tools/tapesmoke.py` | Every TAP in a folder through the host build (CLOAD"", fast or real time): a summary and a contact sheet |
+| `tools/loadertap.py` | A test tape whose loader reads CB1 itself (the ROM's routines copied to RAM) |
 | `docs/oric-hardware.md` | The hardware research: memory map, VIA, AY, ULA and display, keyboard and NMI, cassette and TAP, Microdisc and MFM_DISK, reset; sources |
 | `roms/` | The ROMs (not in git; `roms/README.md` says where they come from) |
 
@@ -127,8 +142,8 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - **Tapes** (docs 6): fast (a cycle a bit: 210 us + 210 or 418 us) and
   slow (8 x 2400 Hz or 4 x 1200 Hz) encodings; bytes framed as a 0 start
   bit, 8 data bits LSB first, odd parity, 3 stop bits; a 9-byte header;
-  `.tap` files are the byte streams one after another (the ROM's read
-  routine can be trapped for a fast load, or the bits played through CB1).
+  `.tap` files are the byte streams one after another (the ROM's routines
+  trapped for a fast load, or the bits played through CB1: both, below).
 - **The Microdisc** (docs 7): a WD1793 at 1 MHz at $0310-$0313, the
   control register at $0314 (IRQ enable, ROM disable, MAP, side, drive,
   density), status at $0314 and DRQ at $0318; the 8 KB EPROM boots Oric
@@ -165,8 +180,9 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   register in its read cycle; PB3 in is the keyboard's sense for the row
   on PB0-2 and the columns low in the AY's port A; PB4's rising edge (the
   printer's strobe) acknowledges at once on CA1 (no printer: LPRINT doesn't
-  hang); PB6 is the motor (status only so far); the IRQ is a level on the
-  6502's IRQ bit 0.
+  hang); PB6 the motor while it's an output driven high (`tape_motor()`;
+  the inputs' pull-up at reset doesn't count); CB1 the tape's edges; the
+  IRQ is a level on the 6502's IRQ bit 0.
 - **The AY** (`psg.c`): registers masked to their bits, R13 restarts the
   envelope, an address with its high nibble set deselects the chip (the
   data sheet's mask); port A reads R14 while R7 bit 6 makes it an output,
@@ -191,12 +207,57 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   by row), typed text (`oric_type()`: a key held 3 frames, then 2 up; its
   SHIFT or CTRL a frame before it; capitals plain while CAPS is on, with
   SHIFT when off; small letters plain; control codes as CTRL + letter,
-  `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL).
+  `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL). After a RETURN
+  the next key waits until BASIC waits for one (1.1: the PC in its key
+  loop, `$C5E8`/`$023B`/`$EB78`, at a frame's end, 3-250 frames; other ROMs
+  25 frames): see the lessons.
+- **The tape** (`tape.c`, docs 6): a TAP file read whole into PSRAM (4 MB
+  at most) and indexed (each file's leader, `$24`, header, name, data; a
+  file the scan can't follow is searched for again at `16 16 16 24`).
+  *Played* as CB1 edges at their cycles (`tape_edge_at` an event in
+  `run_to()`; `tape_sync()` before every VIA access): each bit a cycle from
+  rising edge to rising edge, 1 = 210 + 210 us, 0 = 210 + 418 (the ROM's
+  writer, timer 1's N + 2); 300 baud (1 = eight short cycles, 0 = four of
+  418 + 418) when BASIC 1.1's `$024D` says so as the motor starts. A byte:
+  three 1s, the 0 start bit, 8 data bits from bit 0, parity (1 for an even
+  count of ones). 64 more `$16`s in front of each file's leader (TAP files
+  have 3 or 4; the ROM's sync wants a bit-synchronised one and three whole
+  ones), 100 1s after a name (the loader prints and compares meanwhile),
+  two 1s after the tape's last byte (a bit is measured to the next rising
+  edge). It plays while the motor runs and something reads it: IFR read 500
+  times in a frame or CB1's interrupt enabled starts it (fast: two such
+  frames, real time: one), two frames under 50 reads stop it (TAP files
+  lost the real tapes' gaps). *Fast* (the default; BASIC 1.1 only, its
+  routines' first bytes checked): `$E4`, `$E6`, `$E7` read through the bus
+  callback while the tape stands still (`tape_rom_read()`: the ROM's bytes
+  always), and a read of a routine's first byte stops the run after that
+  instruction; if the PC then is where it leads (a JSR's target with the
+  return on the stack), `tape_trap()` does the routine: the sync `$E735`
+  (on to the next file's `$24`, X = 0; at the tape's end from its start,
+  once a motor start), the byte reader `$E6C9`, the data loop `$E4E0` (the
+  file at once, `,V` counted in `$025C`; a file the tape ends in loads as
+  far as it goes), and with any tape in the save side: the leader `$E75A`
+  (three `$16`s), the byte writer `$E65E`, the data loop `$E62E`, onto the
+  tape's end, into the file when the motor stops (or 50 frames after the
+  last). A routine it can't serve (the tape out, a name not on it) goes on
+  in the ROM, and the load traps rest until the motor starts again (the
+  ROM reads on in real time). *Real time*: the load traps off; the sync
+  only watched (a search starting at the tape's end rewinds it once). The
+  status (`oric_tape_status()`): the file at the head, motor, playing,
+  files loaded and saved.
 
 ## The board side (`main/`)
 
-- **Setup screen** (Tab5): Model at y 269 (Atmos x 440, Oric-1 x 795),
-  Start/Restart `t 1065 637`, the setup corner `t 1265 15 2600` (held).
+- **Setup screen** (Tab5): Model at y 250 (Atmos x 440, Oric-1 x 795),
+  Tape at y 326 (Fast x 440, Real time x 795: live, no restart), Sound at
+  y 402, Start/Restart/Back `t 1065 637`, the setup corner `t 1265 15
+  2600` (held).
+- **The tape drive** (`disks_config_t`, folder `oric`, NVS `oricdisks`):
+  any `.tap` goes in (the core's `oric_tape_insert()`: an empty file is a
+  blank tape), the web page's New makes `TAPEnnnn.tap` (empty), its light
+  is the motor, its reads and writes the files loaded and saved at once,
+  its detail the file at the head ("File 2 of 3: "CODE", machine code at
+  #0400-#0405, AUTO") or "At its end".
   The status lines show the WiFi name and IP: keep them out of published
   images.
 - **Picture**: 240 x 224 at `view_width` 800 (1.33 : 1, as a TV frames the
@@ -209,12 +270,13 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   and Pause the NMI button.
 - **Console**: `k <n>` taps matrix key n (row * 8 + column, decimal),
   `K <n> <0|1>`, `T <text>` (`\n` RETURN; ~6 frames a character), `N` the
-  NMI button. `i` (the tool's `info`): frames, registers, text/hires,
-  50/60 Hz.
+  NMI button, `W` rewinds the tape. `i` (the tool's `info`): frames,
+  registers, text/hires, 50/60 Hz, the tape's position, motor, playing.
 - **Web page's card** (`status()`): System, ROM, Screen (mode, 50/60 Hz),
   Sound (the AY's channels: tone frequency, noise, volume or envelope),
   VIA (timer 1's period, its interrupt), Keyboard (CAPS), Cassette (the
-  motor), Expansions. The detailed card: `TODO.md`.
+  motor, playing at 2400 or 300 baud, fast or real time, a failed save),
+  Expansions. The detailed card: `TODO.md`.
 
 ## Lessons (each one cost a debugging session)
 
@@ -237,6 +299,37 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   full scan takes ~4.5 ms, columns 7 down to 0; a key in column 2 pressed
   after the scan passed the modifiers' column 4 is read unshifted (':'
   came out ';'). The modifier now goes down a frame earlier.
+- **BASIC empties the key buffer on its way back to "Ready"** (`$C993`):
+  typed lines after a command lost their first key ("OKE#403", "RINT"),
+  program lines (no command run) didn't. A real Oric drops a key typed
+  that early too; typing waits for BASIC's key loop after a RETURN.
+- **A trapped ROM page must read as the ROM**: JAMs in copies of the tape
+  routines' pages made a fine trap until Poopy, whose loader copies
+  `$E6C9`-`$E759` into RAM and runs it: the copy had the JAMs. The pages go
+  through the bus callback now (the ROM's bytes), and a routine counts as
+  entered only when the PC after its first byte's instruction is where
+  that instruction leads.
+- **The ROM's sync loops through its own entry**: `$E735` is entered again
+  for every bit it shifts in (`BNE $E735`). A trapped sync that declined
+  (the name not on the tape) was taken as entered again at each bit: the
+  tape was synced and stopped every bit and never moved. A declined load
+  trap now rests until the motor starts again.
+- **A TAP file has lost the tape's gaps**: Demodiam keeps the motor on for
+  an 8 s intro before its next CLOAD, Damsel clicks the relay during play;
+  playing whenever the motor ran, the tape ran past the next file
+  (Demodiam got the wrong one). It plays only while something reads it.
+- **The parity bit needs an edge after it**: a bit is measured from its
+  rising edge to the next; a tape ending on its last byte's parity bit
+  left the ROM waiting for ever ("Loading ..", the last byte). The tape
+  ends with two 1s, as the Spectrum's does with an edge.
+- **TAP images a byte short**: Fire Flash's header says `$2000-$67FF`,
+  its file ends a byte before (an exclusive end, likely): the ROM waited
+  for the last byte. A file the tape ends in loads as far as it goes (and
+  logs it); in real time it still waits, as an Oric would.
+- **The ROM's bit reader runs in the trapped pages**: playing in real
+  time, every fetch went through the bus callback: core 1 53-55% on the
+  Tab5 (16% idle). While the tape plays the pages are the ROM's again
+  (nothing to trap then): 25-27%.
 
 ## Testing
 
@@ -252,9 +345,41 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   `ORIC_TRACE=<pc>:<n>`, `ORIC_WATCH=<addr>[:<frame>]` (any RAM address:
   its page's writes go through the callback; `ORIC_RING=<n>` instructions
   before), `ORIC_DUMP=<addr>:<len>;...`, `ORIC_DASM=<addr>:<n>`.
+  Tapes: `ORIC_TAPE=<file>` (CSAVE writes onto it: a copy),
+  `ORIC_NEWTAPE=<file>` (a blank one made and put in), `ORIC_REALTIME=1`,
+  `ORIC_TAPE_LOG=1` (the tape's state each second); loads and saves are
+  logged (`tape: loaded "NAME" ($0501-$051A)`). With a tape in, `$E4`,
+  `$E6` and `$E7` read as `$FF` to the disassembler (`m6502_peek()`: the
+  bus callback's pages).
 - `make -C components/oric/host check`: "37631 BYTES FREE" and "Ready"
   after 300 frames, a typed FOR loop's output, typed mixed case with CAPS
-  off.
+  off; CSAVE onto a blank tape (its header's bytes), CLOAD by name fast and
+  at 300 baud in real time; `tools/loadertap.py`'s tape fast and in real
+  time.
+- **Tapes** (2026-11-19, host): CSAVE onto a blank tape (the ROM's format:
+  `16 16 16 24`, the header, the name, the data), CSAVE ,S and ,AUTO, a
+  memory block (`A#400,E#405`); loaded back fast and in real time at 2400
+  and 300 baud; a BASIC loader with AUTO that CLOADs a machine-code file
+  by name and CALLs it; a search past another file; CLOAD ,V (0 errors,
+  also after the tape's end); a name not on the tape (read once, then the
+  wait); `tools/loadertap.py`'s loader. **348 original TAP files**
+  (oric-soft.bedroomlan.org's TAPES section, 206 archives; Axayac's
+  didn't download) with `tools/tapesmoke.py`, fast (3000 frames) and in
+  real time (20000): all read to their end or as far as their programs
+  ask (the rest wait for a key, or for a part on another TAP: Pacman,
+  Tenis, Sokoban's .COM; Scribe's SCRIBE.2/.3 aren't on its tape;
+  Diamant's last part resets unless the earlier parts ran), the two modes
+  ending in the same place (bar tapes with bytes after their last file:
+  one byte, the real time's started one, and tapes still loading at the
+  cut-off); the contact sheets show title screens and menus. Not checked
+  here: whether each program then runs (`TODO.md`, original software).
+- **Tapes on the Tab5** (2026-11-19): the setup's Tape row (Fast / Real
+  time, kept after a reflash); tapes uploaded through the web API; Cobra
+  (4 files) at once and running; CSAVE onto a blank tape made by the API,
+  the file downloaded back (51 bytes, as on the host); CLOAD in real time
+  of it, LIST; 007 (28 KB) in real time at 100%, 50 fps, core 1 25-27%
+  (16% idle); `loadertap.py`'s tape fast: the first file through the
+  traps, the second played to its loader.
 - Checked on the host (2026-11-19): BASIC 1.1's banner, "37631 BYTES
   FREE" and "Ready" at frame ~123 (the RAM test); the cursor toggles every
   250,050 cycles (25 ticks of 10,002); typed PRINT, FOR/NEXT, LIST, RUN,
@@ -287,10 +412,14 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   manual, the AUG's pages, the service manual, data sheets, the Microdisc
   and Sedoric manuals, MAME's, Clock Signal's and the MiSTer core's
   sources for comparison; `reference/`: MAME's oric.cpp, microdisc.cpp,
-  jasmin.cpp; `roms/`: MAME's ROM sets), 79 MB. The software download
-  was stopped early: 15 of oric-soft.bedroomlan.org's ~730 files
-  (`bedroomlan_index.tsv` lists them all) and oric.org's 347 titles
-  listed (`oricorg/titles.tsv`, nothing downloaded): `TODO.md` 5.
+  jasmin.cpp; `roms/`: MAME's ROM sets), 79 MB. The software: of
+  oric-soft.bedroomlan.org's ~730 files (`bedroomlan_index.tsv` lists
+  them all; `bedroomlan_fetch.tsv` how each came: the site times out, the
+  Wayback Machine's copies), its TAPES section (206 archives,
+  `bedroomlan/TAPES/`; unpacked in `tapes/`: 348 TAP files, no extension
+  in most) and 15 others; oric.org's 347 titles listed
+  (`oricorg/titles.tsv`, nothing downloaded): `TODO.md`, original
+  software.
 - `roms/*.rom` here (not in git): `roms/README.md` (MAME's sets or
   oric-soft; the CRCs to check).
 

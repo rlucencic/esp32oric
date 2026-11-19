@@ -6,6 +6,7 @@
 /* Machine settings kept in NVS (namespace "oric") */
 typedef struct {
     uint8_t model;          /* 0: Oric Atmos (BASIC 1.1), 1: Oric-1 (BASIC 1.0) */
+    uint8_t tape_fast;      /* 1: CLOAD at once (the ROM's routines trapped), 0: real time */
 } settings_t;
 
 extern settings_t settings;

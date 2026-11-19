@@ -39,45 +39,29 @@ static void reserve_memory(void)
 
 static void storage(bool sd_card)
 {
-    emu_set_drive_info(sd_card ? "Tapes (.TAP) from the SD card: they don't play yet" : "No SD card: no tapes");
+    emu_set_drive_info(sd_card ? "Tapes (.TAP) on the SD card" : "No SD card: no tapes");
 }
 
 /* ---- The tape drive: TAP files in the SD card's oric/ folder, listed,
- * uploaded and downloaded by the web page. Tapes don't play yet (TODO.md
- * 2): the drive only holds the name, and says so
+ * uploaded and downloaded by the web page; the core plays them (tape.c).
+ * A blank tape is an empty .TAP: CSAVE puts its files on the end of any.
  */
 
-static char s_tape[160];
+#define BLANK_TAPE  1                   /* the "size" of a blank tape */
 
-/* A TAP file: its first file's lead-in ($16 bytes, then $24) */
 static bool tape_insert(int drive, const char *path)
 {
-    uint8_t head[64];
-    FILE *f = fopen(path, "rb");
-    size_t n = f ? fread(head, 1, sizeof(head), f) : 0;
-    if (f) {
-        fclose(f);
-    }
-    size_t i = 0;
-    while (i < n && head[i] == 0x16) {
-        i++;
-    }
-    if (i == 0 || i >= n || head[i] != 0x24) {
-        ESP_LOGW(TAG, "%s: not a TAP file", path);
-        return false;
-    }
-    snprintf(s_tape, sizeof(s_tape), "%s", path);
-    return true;
+    return oric_tape_insert(path);
 }
 
 static void tape_eject(int drive)
 {
-    s_tape[0] = 0;
+    oric_tape_eject();
 }
 
 static const char *tape_path(int drive)
 {
-    return s_tape[0] ? s_tape : NULL;
+    return oric_tape_path();
 }
 
 static bool tape_write_protected(int drive)
@@ -85,8 +69,14 @@ static bool tape_write_protected(int drive)
     return false;
 }
 
+static bool tape_create(const char *path, uint32_t bytes)
+{
+    return oric_tape_create(path);
+}
+
 static const char *const extensions[] = { ".tap", NULL };
 static const char *const drive_names[] = { "Tape" };
+static const disks_size_t sizes[] = { { BLANK_TAPE, "Blank tape (.TAP)" } };
 
 static const disks_config_t disks = {
     .folder = "oric",
@@ -97,11 +87,16 @@ static const disks_config_t disks = {
     .nvs_namespace = "oricdisks",
     .drives = 1,
     .drive_names = drive_names,
+    .new_prefix = "TAPE",
+    .new_extension = ".tap",
+    .sizes = sizes,
+    .size_count = 1,
     .max_upload = 4 * 1024 * 1024,
     .insert = tape_insert,
     .eject = tape_eject,
     .path = tape_path,
     .write_protected = tape_write_protected,
+    .create = tape_create,
 };
 
 /* ---- Starting ---- */
@@ -122,6 +117,7 @@ static bool start(void)
     }
     s_cfg.model = settings.model ? ORIC_1 : ORIC_ATMOS;
     s_cfg.rom = s_rom;
+    oric_tape_fast(settings.tape_fast);
     if (!oric_init(&s_cfg)) {
         emu_set_message("The Oric could not be set up: see the log.");
         return false;
@@ -152,8 +148,23 @@ static void model_set(int i)
     }
 }
 
+static const char *const tape_names[] = { "Fast", "Real time", "" };
+
+static int tape_get(void)
+{
+    return settings.tape_fast ? 0 : 1;
+}
+
+static void tape_set(int i)
+{
+    settings.tape_fast = i == 0;
+    settings_save();
+    oric_tape_fast(settings.tape_fast);
+}
+
 static const emu_choice_t choices[] = {
     { "Model", model_names, model_get, model_set, false },
+    { "Tape", tape_names, tape_get, tape_set, true },
 };
 
 /* ---- Status ---- */
@@ -180,18 +191,36 @@ static int channel_text(char *buf, size_t len, const oric_status_t *s, int ch)
     return snprintf(buf, len, "%c %s, %s", 'A' + ch, noise ? "noise" : "no tone", level);
 }
 
+/* Where the tape is: the file at the head, or its end */
+static void tape_text(char *text, size_t len, const oric_tape_status_t *t)
+{
+    static const char *const how[] = { "BASIC", "machine code", "an array" };
+    if (t->file >= t->files) {
+        snprintf(text, len, "At its end: %d file%s, %lu bytes", t->files, t->files == 1 ? "" : "s",
+                 (unsigned long)t->size);
+        return;
+    }
+    const char *type = t->type == 0x00 ? how[0] : t->type == 0x80 ? how[1] : t->type == 0x40 ? how[2] : "type ?";
+    snprintf(text, len, "File %d of %d: \"%s\", %s at #%04X-#%04X%s", t->file + 1, t->files, t->name, type,
+             t->start, t->last, t->autorun ? ", AUTO" : "");
+}
+
 static void status(emu_json_t *j, int section)
 {
     oric_status_t s;
     oric_get_status(&s);
+    oric_tape_status_t t;
+    oric_tape_status(&t);
+    char text[200];
     if (section == EMU_STATUS_DRIVES) {
         /* the light: the cassette motor's relay (PB6) */
-        emu_json_drive(j, drive_names[0], disks_name(0), false, s.motor, 0, 0,
-                       disks_name(0) ? "Tapes don't play yet (to come): CLOAD won't find it" :
-                       "Tapes don't play yet (to come)");
+        if (t.inserted) {
+            tape_text(text, sizeof(text), &t);
+        }
+        emu_json_drive(j, drive_names[0], disks_name(0), false, s.motor, t.loaded, t.saved,
+                       t.inserted ? text : NULL);
         return;
     }
-    char text[200];
     emu_json_row(j, "System", s.model == ORIC_1 ? "Oric-1: a 6502A at 1 MHz, 64 KB RAM, the ULA, a 6522, an AY-3-8912" :
                  "Oric Atmos: a 6502A at 1 MHz, 64 KB RAM, the ULA, a 6522, an AY-3-8912");
     emu_json_row(j, "ROM", s.model == ORIC_1 ? "BASIC 1.0 (basic10.rom)" : "BASIC 1.1 (basic11b.rom)");
@@ -213,8 +242,11 @@ static void status(emu_json_t *j, int section)
     snprintf(text, sizeof(text), "CAPS %s (Caps Lock: CTRL-T); by position, Alt FUNCT, Tab and Esc ESC, "
              "F12 or Pause the reset button (NMI)", s.caps ? "on" : "off");
     emu_json_row(j, "Keyboard", text);
-    emu_json_row(j, "Cassette", s.motor ? "Motor on; tapes don't play yet (to come)" :
-                 "Motor off; tapes don't play yet (to come)");
+    snprintf(text, sizeof(text), "Motor %s%s; %s%s", s.motor ? "on" : "off",
+             t.playing ? (t.slow ? ", playing at 300 baud" : ", playing at 2400 baud") : "",
+             !t.fast ? "loads in real time" : t.traps ? "CLOAD and CSAVE at once" : "real time (not BASIC 1.1)",
+             t.write_failed ? "; a CSAVE couldn't be written to the card" : "");
+    emu_json_row(j, "Cassette", text);
     emu_json_row(j, "Expansions", "None (the Microdisc to come)");
 }
 
@@ -224,15 +256,24 @@ static void console_info(char *buf, size_t len)
 {
     oric_status_t s;
     oric_get_status(&s);
-    snprintf(buf, len, "frames %lu PC %04X A %02X X %02X Y %02X S %02X P %02X %s %s",
+    oric_tape_status_t t;
+    oric_tape_status(&t);
+    snprintf(buf, len, "frames %lu PC %04X A %02X X %02X Y %02X S %02X P %02X %s %s tape %lu/%lu%s%s",
              (unsigned long)s.frames, s.pc, s.a, s.x, s.y, s.s, s.p, s.hires ? "hires" : "text",
-             s.hz50 ? "50Hz" : "60Hz");
+             s.hz50 ? "50Hz" : "60Hz", (unsigned long)t.pos, (unsigned long)t.size, s.motor ? " motor" : "",
+             t.playing ? " playing" : "");
+}
+
+static void rewind_tape(void *arg)
+{
+    oric_tape_rewind();
 }
 
 /*   k <n>              tap matrix key n (row * 8 + column)
  *   K <n> <0|1>        key n down (1) or up (0)
  *   T <text>           type text (\n is RETURN)
  *   N                  the button underneath (NMI)
+ *   W                  rewind the tape
  */
 static bool console_command(const char *line)
 {
@@ -272,6 +313,9 @@ static bool console_command(const char *line)
     }
     case 'N':
         oric_nmi();
+        return true;
+    case 'W':
+        emu_paused(rewind_tape, NULL);
         return true;
     default:
         return false;

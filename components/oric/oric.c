@@ -34,6 +34,7 @@ static void map_memory(void)
             oric.cpu.wr[p] = s_sink;
         }
     }
+    tape_map();                         /* the tape routines' pages: traps */
 }
 
 #ifdef ORIC_HOST_HOOK
@@ -43,7 +44,14 @@ void oric_host_write(uint16_t a, uint8_t v);    /* host builds: ORIC_WATCH */
 static uint8_t bus_read(void *ctx, uint16_t a)
 {
     if ((a & 0xFF00) == 0x0300) {
+        tape_sync(oric.cpu.cycles);
+        if ((a & 0x0F) == 0x0D) {
+            tape_poll();                /* IFR: a loader may be polling CB1 */
+        }
         return via_read(&oric.via, a & 0x0F);
+    }
+    if (a >= 0xC000) {
+        return tape_rom_read(a);        /* the tape routines' pages, while trapped */
     }
     return 0xFF;                        /* (nothing else comes here) */
 }
@@ -54,6 +62,7 @@ static void bus_write(void *ctx, uint16_t a, uint8_t v)
     oric_host_write(a, v);
 #endif
     if ((a & 0xFF00) == 0x0300) {
+        tape_sync(oric.cpu.cycles);
         via_write(&oric.via, a & 0x0F, v);
         return;
     }
@@ -64,6 +73,16 @@ static void bus_write(void *ctx, uint16_t a, uint8_t v)
                 oric.screen_touched = 2;
             }
         }
+    }
+}
+
+void oric_write(uint16_t a, uint8_t v)
+{
+    uint8_t *p = oric.cpu.wr[a >> 8];
+    if (p) {
+        p[a & 0xFF] = v;
+    } else {
+        bus_write(NULL, a, v);
     }
 }
 
@@ -84,7 +103,8 @@ static uint8_t via_in(via_t *v, int port)
 
 /* CA2 is the AY's BC1, CB2 its BDIR (BC2 tied high), port A its bus;
  * PB4 the printer's strobe (no printer: acknowledged at once on CA1, so
- * LPRINT doesn't wait for ever), PB6 the cassette motor
+ * LPRINT doesn't wait for ever), PB6 the cassette motor's relay (driven
+ * high as an output; an input's pull-up at reset doesn't count)
  */
 static void via_out(via_t *v, int port)
 {
@@ -98,6 +118,11 @@ static void via_out(via_t *v, int port)
         via_ca1(v, true);
     }
     oric.port_b = pb;
+    bool motor = (v->ddrb & 0x40) && (pb & 0x40);
+    if (motor != oric.motor) {
+        oric.motor = motor;
+        tape_motor(motor);
+    }
 }
 
 static void via_irq(via_t *v, bool on)
@@ -159,6 +184,8 @@ void oric_reset(void)
     psg_reset();
     oric_keyboard_reset();
     oric.port_b = 0xFF;
+    oric.motor = false;
+    tape_reset();
     via_reset(&oric.via);
     map_memory();
     m6502_reset(&oric.cpu);
@@ -177,25 +204,31 @@ void oric_nmi(void)
 
 /* ---- The frame ---- */
 
-/* The CPU up to cycle t, stopping at the VIA's timer underflows (its
- * interrupt then reaches the 6502 at the instruction it fell in, if before
- * that one's interrupt poll)
+/* The CPU up to cycle t, stopping at the VIA's timer underflows and the
+ * tape's edges on CB1 (an interrupt then reaches the 6502 at the
+ * instruction it fell in, if before that one's interrupt poll), and after
+ * an instruction that read a tape routine's first byte (tape.c's traps)
  */
 static void run_to(uint64_t t)
 {
     m6502_t *c = &oric.cpu;
     while (c->cycles < t) {
-        if (c->cycles >= oric.via.next_event) {
-            uint64_t at = oric.via.next_event;
+        uint64_t ev = oric.via.next_event < tape_edge_at ? oric.via.next_event : tape_edge_at;
+        if (c->cycles >= ev) {
             bool before = c->irq != 0;
-            via_update(&oric.via);
-            if (!before && c->irq && at <= c->poll_cycle) {
+            tape_sync(c->cycles);
+            if (c->cycles >= oric.via.next_event) {
+                via_update(&oric.via);
+            }
+            if (!before && c->irq && ev <= c->poll_cycle) {
                 m6502_repoll(c);
             }
+            ev = oric.via.next_event < tape_edge_at ? oric.via.next_event : tape_edge_at;
         }
-        uint64_t u = oric.via.next_event < t ? oric.via.next_event : t;
+        uint64_t u = ev < t ? ev : t;
         c->until = u > c->cycles ? u : c->cycles + 1;
         m6502_run(c);
+        tape_trap();
     }
 }
 
@@ -208,6 +241,7 @@ void oric_run_frame(void)
     if (oric.nmi_request) {
         oric.nmi_request = false;
         m6502_nmi(&oric.cpu);
+        tape_nmi();
     }
     oric_video_frame_start();
     int lines = ORIC_LINES_50HZ;
@@ -226,6 +260,7 @@ void oric_run_frame(void)
     oric.frames++;
     oric_video_frame_end();
     oric_keyboard_frame();
+    tape_frame_end();
 }
 
 /* ---- Status ---- */
@@ -243,7 +278,7 @@ void oric_get_status(oric_status_t *s)
     s->hires = (oric.mode & MODE_HIRES) != 0;
     s->hz50 = (oric.mode & MODE_50HZ) != 0;
     s->caps = (oric.ram[0x020C] & 0x80) != 0;     /* $FF on, $7F off */
-    s->motor = (oric.port_b & 0x40) != 0;
+    s->motor = oric.motor;
     s->timer1 = oric.via.t1_latch;
     s->timer1_irq = (oric.via.ier & 0x40) != 0;
     psg_get_regs(s->ay);

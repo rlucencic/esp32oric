@@ -846,6 +846,30 @@ Fast loading by trap: CLK intercepts the ROM's read-byte routine at $E6C9
 (BASIC 1.1; $E630 in 1.0) and returns the next byte in A, with $024D (1.1;
 $67 in 1.0) as the speed flag [CLK `Oric.cpp`] [one source].
 
+What 348 TAP files (oric-soft.bedroomlan.org's TAPES section) showed when
+the emulator played and trapped them (2026-11-19) [observed]:
+
+- BASIC 1.1's loader: CLOAD at $E85B calls the set-up $E76A (IER $7F, T2
+  low latch $F4, PCR $10, DDRB $FF, ACR $C0, T1 $00D0, ORB $40: the
+  motor), "Searching" $E57D, the header search $E4AC (sync $E735, bytes
+  until $24, 9 header bytes, the name; again while the name doesn't
+  match), "Loading" $E59B, the data loop $E4E0 (store, or with ,V compare
+  and count in $025C/$025D; $E56C ends it at the end address inclusive),
+  the restore $E93D (VIA reset, motor off). CSAVE at $E909: $E76A,
+  "Saving" $E585, the header $E607 (leader $E75A, $24, the header from
+  $02B0 down, the name from $027F, $00, the gap), the data $E62E, $E93D.
+  The sync is entered again for every bit it shifts in (`BNE $E735`).
+- Some loaders copy the ROM's tape routines into RAM and run the copy
+  (Poopy: $E6C9-$E759); some programs call $E76A themselves (`CALL
+  #E76A`: Third World War, after loading), the motor coming on with it;
+  Damsel drives PB6 during play; Demodiam keeps the motor on through an
+  8 s intro before its next CLOAD (the cassette surely has a gap there;
+  the TAP file has none).
+- TAP files: some are a byte short of their header's end address (Fire
+  Flash: $2000-$67FF, the file ends at $67FE); some have bytes after the
+  last file (Trouble, Xenon 3, Welcome); a game's parts may be separate
+  TAP files (Pacman, Tenis, Sokoban).
+
 ## 7. The Microdisc
 
 ### 7.1 What it is
