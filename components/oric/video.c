@@ -33,6 +33,7 @@ enum { CELL_INVERSE = 0x1000, CELL_FLASH = 0x2000 };
 typedef struct {
     uint16_t cells[ORIC_PICTURE_LINES][CELLS];
     bool any_flash;
+    uint8_t styles;                     /* the styles its lines used: 1 alternate, 2 double height, 4 flash */
 } frame_t;
 
 static frame_t *s_frames;
@@ -67,6 +68,7 @@ void oric_video_frame_start(void)
     if (s_decoding) {
         s_start_mode = oric.mode;
         s_frames[s_writing].any_flash = false;
+        s_frames[s_writing].styles = 0;
     }
 }
 
@@ -82,7 +84,7 @@ void oric_video_line(int y)
     const uint8_t *text = ram + 0xBB80 + CELLS * (y >> 3);
     const uint8_t *hires = ram + 0xA000 + CELLS * y;
     uint16_t *out = s_frames[s_writing].cells[y];
-    unsigned mode = oric.mode, ink = 7, paper = 0, style = 0, flash = 0;
+    unsigned mode = oric.mode, ink = 7, paper = 0, style = 0, flash = 0, styles = 0;
     for (int c = 0; c < CELLS; c++) {
         bool hires_cell = (mode & MODE_HIRES) && y < 200;
         uint8_t b = hires_cell ? hires[c] : text[c];
@@ -108,8 +110,10 @@ void oric_video_line(int y)
         }
         out[c] = pattern | (ink << 6) | (paper << 9) | ((b & 0x80) << 5) | ((style & 4) << 11);
         flash |= style & 4;
+        styles |= style;
     }
     oric.mode = mode;
+    s_frames[s_writing].styles |= styles;
     if (flash) {
         s_frames[s_writing].any_flash = true;
     }
@@ -142,6 +146,38 @@ void oric_video_frame_end(void)
 uint32_t oric_screen_signature(void)
 {
     return s_signature;
+}
+
+/* The latest picture: the colours it shows (a bit each: inverse applied,
+ * paper where a cell has a 0 pixel, ink where a 1), its flashing cells
+ * and the styles used (any task: a frame that changes meanwhile counts
+ * partly)
+ */
+void oric_screen_usage(oric_screen_usage_t *u)
+{
+    memset(u, 0, sizeof(*u));
+    if (s_frames == NULL) {
+        return;
+    }
+    const frame_t *f = &s_frames[s_latest];
+    for (int y = 0; y < ORIC_PICTURE_LINES; y++) {
+        for (int c = 0; c < CELLS; c++) {
+            unsigned v = f->cells[y][c];
+            unsigned ink = (v >> 6) & 7, paper = (v >> 9) & 7, inv = (v & CELL_INVERSE) ? 7 : 0;
+            if ((v & 0x3F) != 0x3F) {
+                u->colours |= 1u << (paper ^ inv);
+            }
+            if (v & 0x3F) {
+                u->colours |= 1u << (ink ^ inv);
+                if (v & CELL_FLASH) {
+                    u->flashing++;
+                }
+            }
+        }
+    }
+    u->flashing /= 8;                   /* (a cell's 8 lines: character cells) */
+    u->alternate = (f->styles & 1) != 0;
+    u->double_height = (f->styles & 2) != 0;
 }
 
 /* ---- Drawing ---- */

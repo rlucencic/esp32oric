@@ -274,7 +274,24 @@ static const emu_choice_t choices[] = {
     { "Microdisc", microdisc_names, microdisc_get, microdisc_set, false },
 };
 
-/* ---- Status ---- */
+/* ---- Status ----
+ *
+ * The web page's machine card: the state now, a row each, short (the whole
+ * /api/status reply has 8 KB, esp32emu's STATUS_SIZE; a " goes out as \").
+ * status() runs on the HTTP task: it reads what the core keeps.
+ */
+
+static const char *const colour_names[8] = { "black", "red", "green", "yellow", "blue", "magenta", "cyan",
+                                             "white" };
+
+/* The ULA's colours: bit 0 red, 1 green, 2 blue, full or nothing */
+static size_t swatch(char *text, size_t size, unsigned c)
+{
+    unsigned long rgb = ((c & 1) ? 0xFF0000ul : 0) | ((c & 2) ? 0x00FF00ul : 0) | ((c & 4) ? 0x0000FFul : 0);
+    int n = snprintf(text, size, "<b style=\"background:#%06lx\" title=\"%s\">&nbsp;&nbsp;&nbsp;</b> ", rgb,
+                     colour_names[c]);
+    return n < 0 ? 0 : (size_t)n < size ? (size_t)n : size - 1;
+}
 
 /* An AY channel: its tone's frequency and its level (or the envelope) */
 static int channel_text(char *buf, size_t len, const oric_status_t *s, int ch)
@@ -296,6 +313,87 @@ static int channel_text(char *buf, size_t len, const oric_status_t *s, int ch)
                         noise ? " + noise" : "", level);
     }
     return snprintf(buf, len, "%c %s, %s", 'A' + ch, noise ? "noise" : "no tone", level);
+}
+
+/* The AY: its channels, the noise and envelope when used, port A (the
+ * keyboard's columns, low a column scanned)
+ */
+static void sound_text(char *text, size_t len, const oric_status_t *s)
+{
+    size_t n = 0;
+    bool noise = false, envelope = false;
+    for (int ch = 0; ch < 3 && n < len; ch++) {
+        n += (size_t)snprintf(text + n, len - n, "%s", ch ? "; " : "");
+        if (n < len) {
+            n += (size_t)channel_text(text + n, len - n, s, ch);
+        }
+        bool on = (s->ay[8 + ch] & 0x10) || (s->ay[8 + ch] & 0x0F);
+        noise |= on && !(s->ay[7] & (8 << ch));
+        envelope |= (s->ay[8 + ch] & 0x10) != 0;
+    }
+    if (noise && n < len) {             /* 1 MHz / 16 / period */
+        unsigned p = s->ay[6] & 31;
+        n += (size_t)snprintf(text + n, len - n, "; noise %lu Hz", 62500ul / (p ? p : 1));
+    }
+    if (envelope && n < len) {          /* a sweep: 256 x its period, at 1 MHz */
+        unsigned p = s->ay[11] | (s->ay[12] << 8);
+        n += (size_t)snprintf(text + n, len - n, "; envelope shape %u, %lu ms", s->ay[13] & 15,
+                              (256ul * (p ? p : 1) + 500) / 1000);
+    }
+    if (n < len) {
+        snprintf(text + n, len - n, "; port A #%02X (the keyboard's columns)", s->ay[14]);
+    }
+}
+
+/* The keys by matrix position (oric.h's ORIC_KEY_*) */
+static const char *const key_names[ORIC_KEYS] = {
+    "7", "N", "5", "V", NULL, "1", "X", "3",
+    "J", "T", "R", "F", NULL, "ESC", "Q", "D",
+    "M", "6", "B", "4", "CTRL", "Z", "2", "C",
+    "K", "9", ";", "-", NULL, NULL, "\\", "'",
+    "SPACE", ",", ".", "↑", "LEFT SHIFT", "←", "↓", "→",
+    "U", "I", "O", "P", "FUNCT", "DEL", "]", "[",
+    "Y", "H", "G", "E", NULL, "A", "S", "W",
+    "8", "L", "0", "/", "RIGHT SHIFT", "RETURN", NULL, "=",
+};
+
+static void keys_text(char *text, size_t len)
+{
+    uint8_t rows[8];
+    oric_keys_down(rows);
+    size_t n = 0;
+    for (int k = 0; k < ORIC_KEYS && n < len; k++) {
+        if ((rows[k / 8] & (1 << (k % 8))) && key_names[k]) {
+            n += (size_t)snprintf(text + n, len - n, "%s%s", n ? " " : "", key_names[k]);
+        }
+    }
+    if (n == 0) {
+        snprintf(text, len, "none");
+    }
+}
+
+/* The VIA: its timers, interrupts and ports as the Oric wires them */
+static void via_text(char *text, size_t len, const oric_status_t *s)
+{
+    static const char *const flags[7] = { "CA2", "CA1", "SR", "CB2", "CB1", "T2", "T1" };
+    char ier[48] = "", ifr[48] = "";
+    for (int b = 6, ni = 0, nf = 0; b >= 0; b--) {
+        if (s->via.ier & (1 << b)) {
+            ni += snprintf(ier + ni, sizeof(ier) - ni, "%s%s", ni ? " " : "", flags[b]);
+        }
+        if (s->via.ifr & (1 << b)) {
+            nf += snprintf(ifr + nf, sizeof(ifr) - nf, "%s%s", nf ? " " : "", flags[b]);
+        }
+    }
+    /* the AY's bus: BC1 on CA2, BDIR on CB2 (PCR's manual outputs) */
+    bool bc1 = ((s->via.pcr >> 1) & 7) == 7, bdir = ((s->via.pcr >> 5) & 7) == 7;
+    static const char *const bus[4] = { "idle", "read", "write", "address" };
+    uint8_t pb = s->via.orb | ~s->via.ddrb;
+    snprintf(text, len, "T1 every %u µs, %s; T2 %s; interrupts on: %s, pending: %s; "
+             "port A #%02X, the AY %s; port B #%02X: keyboard row %u",
+             s->timer1 + 2, (s->via.acr & 0x40) ? "free running" : "one-shot",
+             (s->via.acr & 0x20) ? "counting PB6" : "one-shot", ier[0] ? ier : "none", ifr[0] ? ifr : "none",
+             s->via.ora, bus[bdir * 2 + bc1], pb, pb & 7);
 }
 
 /* Where the tape is: the file at the head, or its end */
@@ -325,15 +423,78 @@ static void disk_text(char *text, size_t len, const oric_disk_status_t *d, bool 
     }
 }
 
-/* The Microdisc: its controller, the drive, what $C000-$FFFF holds */
+/* A Sedoric disk's free space: its bitmap (track 20, sector 2): $FF, 0,
+ * the free sectors, the files, tracks, sectors a track, ..., the tracks
+ * again with $80 for two sides. Other DOSes: nothing (size 0)
+ */
+static void disk_space(int drive, uint64_t *free_bytes, uint64_t *size)
+{
+    *free_bytes = *size = 0;
+    uint8_t b[256];
+    if (!oric_disk_sector(drive, 0, 20, 2, b)) {
+        return;
+    }
+    unsigned tracks = b[6], sectors = b[7], sides = (b[9] & 0x80) ? 2 : 1;
+    if (b[0] != 0xFF || b[1] != 0 || tracks == 0 || tracks != (b[9] & 0x7Fu) || sectors < 10 || sectors > 19) {
+        return;
+    }
+    *size = (uint64_t)sides * tracks * sectors * 256;
+    *free_bytes = (uint64_t)(b[2] | (b[3] << 8)) * 256;
+    if (*free_bytes > *size) {
+        *free_bytes = *size = 0;
+    }
+}
+
+/* The WD1793's last command and its status bits (Type I's or the rest's) */
 static void microdisc_text(char *text, size_t len, uint8_t control, const oric_fdc_status_t *f)
 {
+    static const char *const commands[16] = {
+        "Restore", "Seek", "Step", "Step", "Step in", "Step in", "Step out", "Step out",
+        "Read Sector", "Read Sector", "Write Sector", "Write Sector", "Read Address", "Force Interrupt",
+        "Read Track", "Write Track",
+    };
+    static const char *const type1[8] = { "busy", "index", "track 0", "CRC error", "seek error", "head loaded",
+                                          "protected", "not ready" };
+    static const char *const type2[8] = { "busy", "DRQ", "lost data", "CRC error", "not found", "deleted mark",
+                                          "protected", "not ready" };
+    bool t1 = f->command < 0x80 || (f->command & 0xF0) == 0xD0;
+    char bits[96] = "";
+    for (int b = 7, n = 0; b >= 0; b--) {
+        if (f->status & (1 << b)) {
+            n += snprintf(bits + n, sizeof(bits) - n, "%s%s", n ? ", " : "", t1 ? type1[b] : type2[b]);
+        }
+    }
     const char *paged = (control & 0x02) ? "BASIC" : (control & 0x80) ? "overlay RAM" : "overlay RAM, the EPROM at #E000";
-    snprintf(text, len, "WD1793 %s #%02X, track %u, sector %u, status #%02X; drive %c side %d%s; "
+    snprintf(text, len, "WD1793 %s %s (#%02X), track %u, sector %u, status #%02X (%s); drive %c side %d%s%s; "
              "#C000-#FFFF: %s; %lu sectors read, %lu written",
-             f->busy ? "busy with" : "done with", f->command, f->track, f->sector, f->status, 'A' + f->drive,
-             f->side, f->motor ? ", motor on" : "", paged, (unsigned long)f->sectors_read,
+             f->busy ? "busy with" : "done with", commands[f->command >> 4], f->command, f->track, f->sector,
+             f->status, bits[0] ? bits : "clear", 'A' + f->drive, f->side, f->motor ? ", motor on" : "",
+             (control & 0x01) ? ", its IRQ on" : "", paged, (unsigned long)f->sectors_read,
              (unsigned long)f->sectors_written);
+}
+
+/* BASIC's pointers in zero page (1.0 and 1.1 alike): the program from $9A,
+ * its variables from $9C, arrays $9E, their end $A0, strings down to $A2,
+ * HIMEM $A6
+ */
+static void basic_text(char *text, size_t len, const oric_status_t *s)
+{
+    uint16_t p[7];
+    for (int i = 0; i < 7; i++) {
+        p[i] = oric_peek(0x9A + 2 * i) | (oric_peek(0x9B + 2 * i) << 8);
+    }
+    uint16_t prog = p[0], vars = p[1], arrays = p[2], end = p[3], strings = p[4], himem = p[6];
+    if (!(prog >= 0x0400 && prog <= vars && vars <= arrays && arrays <= end && end <= strings &&
+          strings <= himem && himem <= 0xC000)) {
+        snprintf(text, len, "BASIC's pointers not set up%s", s->microdisc ? " (a DOS in charge?)" : "");
+        return;
+    }
+    char program[48] = "no BASIC program";
+    if (vars - prog > 2) {              /* (an empty one: its end's two zeros) */
+        snprintf(program, sizeof(program), "BASIC's program #%04X-#%04X (%u bytes)", prog, vars - 1, vars - prog);
+    }
+    snprintf(text, len, "%s, variables %u bytes, arrays %u; %u bytes free below HIMEM #%04X", program,
+             arrays - vars, end - arrays, strings - end, himem);
 }
 
 static void status(emu_json_t *j, int section)
@@ -342,7 +503,7 @@ static void status(emu_json_t *j, int section)
     oric_get_status(&s);
     oric_tape_status_t t;
     oric_tape_status(&t);
-    char text[200];
+    char text[300];
     if (section == EMU_STATUS_DRIVES) {
         /* the light: the cassette motor's relay (PB6) */
         if (t.inserted) {
@@ -354,34 +515,68 @@ static void status(emu_json_t *j, int section)
         for (int d = 0; d < 2; d++) {
             oric_disk_status_t ds;
             oric_disk_status(d, &ds);
+            uint64_t free_bytes = 0, size = 0;
             if (ds.inserted) {
                 disk_text(text, sizeof(text), &ds, s.microdisc);
+                disk_space(d, &free_bytes, &size);
             }
-            emu_json_drive(j, drive_names[DRIVE_A + d], disks_name(DRIVE_A + d), ds.protect,
-                           s.microdisc && ds.selected && ds.motor, ds.reads, ds.writes, ds.inserted ? text : NULL);
+            emu_json_drive_space(j, drive_names[DRIVE_A + d], disks_name(DRIVE_A + d), ds.protect,
+                                 s.microdisc && ds.selected && ds.motor, ds.reads, ds.writes,
+                                 ds.inserted ? text : NULL, free_bytes, size);
         }
         return;
     }
-    emu_json_row(j, "System", s.model == ORIC_1 ? "Oric-1: a 6502A at 1 MHz, 64 KB RAM, the ULA, a 6522, an AY-3-8912" :
-                 "Oric Atmos: a 6502A at 1 MHz, 64 KB RAM, the ULA, a 6522, an AY-3-8912");
-    emu_json_row(j, "ROM", s.model == ORIC_1 ? "BASIC 1.0 (basic10.rom)" : "BASIC 1.1 (basic11b.rom)");
+    const char *irq = (s.irq & 3) == 3 ? "the VIA and the Microdisc" : (s.irq & 1) ? "the VIA" :
+                      (s.irq & 2) ? "the Microdisc" : "none";
+    snprintf(text, sizeof(text), "%s: a 6502A at 1 MHz (IRQ asserted: %s%s), 64 KB RAM, the ULA, a 6522, "
+             "an AY-3-8912%s", s.model == ORIC_1 ? "Oric-1" : "Oric Atmos", irq,
+             (s.p & 0x04) ? "; interrupts masked" : "", s.microdisc ? ", the Microdisc" : "");
+    emu_json_row(j, "System", text);
+
+    const char *paged = !s.microdisc || (s.disk_control & 0x02) ? "BASIC" :
+                        (s.disk_control & 0x80) ? "the overlay RAM" : "the overlay RAM, the EPROM at #E000";
+    snprintf(text, sizeof(text), "%s%s; #C000-#FFFF now: %s",
+             s.model == ORIC_1 ? "BASIC 1.0 (basic10.rom)" : "BASIC 1.1 (basic11b.rom)",
+             s.microdisc ? ", the Microdisc's EPROM (microdis.rom)" : "", paged);
+    emu_json_row(j, "ROM", text);
+
+    int n = snprintf(text, sizeof(text), "RAM #0000-#BFFF, page 3 the VIA%s; ",
+                     s.microdisc ? " (#0310-#031B the Microdisc)" : "");
+    basic_text(text + n, sizeof(text) - n, &s);
+    emu_json_row(j, "Memory", text);
+
     snprintf(text, sizeof(text), "%s, %s (%s); the picture 240 × 224",
-             s.hires ? "HIRES: 240 × 200 at #A000, three text rows below" : "TEXT: 40 × 28 at #BB80",
+             s.hires ? "HIRES: 240 × 200 at #A000 (characters #9800), three text rows below" :
+             "TEXT: 40 × 28 at #BB80 (characters #B400, the alternate set #B800)",
              s.hz50 ? "50 Hz" : "60 Hz", s.hz50 ? "312 lines" : "264 lines");
     emu_json_row(j, "Screen", text);
-    int n = 0;
-    for (int ch = 0; ch < 3 && n < (int)sizeof(text) - 2; ch++) {
-        if (ch) {
-            n += snprintf(text + n, sizeof(text) - n, "; ");
+
+    /* the colours the picture shows now, of the 8 */
+    oric_screen_usage_t u;
+    oric_screen_usage(&u);
+    static char swatches[800];
+    size_t m = (size_t)snprintf(swatches, sizeof(swatches), "%d of 8: ", __builtin_popcount(u.colours));
+    for (unsigned c = 0; c < 8; c++) {
+        if (u.colours & (1u << c)) {
+            m += swatch(swatches + m, sizeof(swatches) - m, c);
         }
-        n += channel_text(text + n, sizeof(text) - n, &s, ch);
     }
+    if (m < sizeof(swatches)) {
+        snprintf(swatches + m, sizeof(swatches) - m, "%s%s%s", u.flashing ? "flashing" : "",
+                 u.double_height ? (u.flashing ? ", double height" : "double height") : "",
+                 u.alternate ? (u.flashing || u.double_height ? ", the alternate set" : "the alternate set") : "");
+    }
+    emu_json_row(j, "Colours", swatches);
+
+    sound_text(text, sizeof(text), &s);
     emu_json_row(j, "Sound", text);
-    snprintf(text, sizeof(text), "Timer 1 every %u µs%s (the keyboard's scan, the cursor)", s.timer1 + 2,
-             s.timer1_irq ? "" : ", its interrupt off");
+    via_text(text, sizeof(text), &s);
     emu_json_row(j, "VIA", text);
-    snprintf(text, sizeof(text), "CAPS %s (Caps Lock: CTRL-T); by position, Alt FUNCT, Tab and Esc ESC, "
-             "F12 or Pause the reset button (NMI)", s.caps ? "on" : "off");
+
+    char keys[120];
+    keys_text(keys, sizeof(keys));
+    snprintf(text, sizeof(text), "Down now: %s; CAPS %s (Caps Lock: CTRL-T); by position, Alt FUNCT, Tab and "
+             "Esc ESC, F12 or Pause the reset button (NMI)", keys, s.caps ? "on" : "off");
     emu_json_row(j, "Keyboard", text);
     snprintf(text, sizeof(text), "Motor %s%s; %s%s", s.motor ? "on" : "off",
              t.playing ? (t.slow ? ", playing at 300 baud" : ", playing at 2400 baud") : "",

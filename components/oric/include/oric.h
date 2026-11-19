@@ -44,6 +44,17 @@ void oric_nmi(void);                    /* the button underneath: NMI, BASIC's w
 uint32_t oric_screen_signature(void);
 void oric_render_line_rgb565(int y, uint16_t *dst);
 
+typedef struct {
+    uint8_t colours;            /* the colours the picture shows (bit n: colour n; bit 0 red, 1 green, 2 blue) */
+    unsigned flashing;          /* flashing cells (in 8-line cells) */
+    bool alternate, double_height;      /* the alternate set, double height used */
+} oric_screen_usage_t;
+
+void oric_screen_usage(oric_screen_usage_t *u);
+
+/* Memory as the 6502 sees it (no side effects; page 3 reads $FF) */
+uint8_t oric_peek(uint16_t addr);
+
 /* ---- Keyboard: keys by matrix position (row * 8 + column) ----
  *
  * Rows are selected by the VIA's PB0-PB2, columns by the AY's port A (a 0
@@ -67,6 +78,7 @@ enum {
     ORIC_KEYS
 };
 void oric_key(int key, bool down);      /* from any task */
+void oric_keys_down(uint8_t rows[8]);   /* the keys down now: a row's columns a byte */
 bool oric_type(const char *text);       /* \n is RETURN; false while still typing */
 
 /* ---- Cassette: TAP files ----
@@ -129,6 +141,10 @@ typedef struct {
 } oric_disk_status_t;
 
 void oric_disk_status(int drive, oric_disk_status_t *s);
+/* A sector's 256 bytes from a disk's image as they are now (any task: the
+ * controller's state untouched); false if it isn't there
+ */
+bool oric_disk_sector(int drive, int side, int track, int sector, uint8_t *buf);
 
 typedef struct {
     bool busy, intrq, motor;
@@ -159,6 +175,11 @@ typedef struct {
     uint8_t ay[16];             /* the AY's registers */
     bool microdisc;             /* one is attached */
     uint8_t disk_control;       /* its control register */
+    uint8_t irq;                /* the 6502's IRQ line: bit 0 the VIA, 1 the Microdisc */
+    struct {                    /* the VIA's registers */
+        uint8_t ora, orb, ddra, ddrb, acr, pcr, ifr, ier;
+        uint16_t t1, t2;        /* the counters */
+    } via;
 } oric_status_t;
 
 void oric_get_status(oric_status_t *s);

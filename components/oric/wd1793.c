@@ -1184,3 +1184,35 @@ void oric_fdc_status(oric_fdc_status_t *s)
     s->sectors_read = wd.sectors_read;
     s->sectors_written = wd.sectors_written;
 }
+
+/* A sector from the image (the status's free space): its own scan, the
+ * controller's parsed track untouched
+ */
+bool oric_disk_sector(int drive, int side, int track, int sector, uint8_t *buf)
+{
+    if (drive < 0 || drive >= ORIC_DRIVES || s_drive == NULL) {
+        return false;
+    }
+    const uint8_t *t = track_ptr(&s_drive[drive], side, track);
+    if (t == NULL) {
+        return false;
+    }
+    for (int i = 0; i + 10 <= TRACK_BYTES; i++) {
+        if (!(t[i] == 0xA1 && t[i + 1] == 0xA1 && t[i + 2] == 0xA1 && t[i + 3] == 0xFE)) {
+            continue;
+        }
+        int size = 128 << (t[i + 7] & 3);
+        if (t[i + 6] != sector || size != 256) {
+            i += 9;
+            continue;
+        }
+        for (int j = i + 10; j < i + 10 + DAM_WINDOW && j + 4 + 256 <= TRACK_STRIDE; j++) {
+            if (t[j] == 0xA1 && t[j + 1] == 0xA1 && t[j + 2] == 0xA1 && (t[j + 3] == 0xFB || t[j + 3] == 0xF8)) {
+                memcpy(buf, t + j + 4, 256);
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}

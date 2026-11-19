@@ -101,7 +101,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 
 | Path | What |
 |---|---|
-| `components/oric/include/oric.h` | The core's API: config (model, ROM, RAM), frame, picture lines, keys by matrix position (`ORIC_KEY_*`, row * 8 + column), typing, sound, status |
+| `components/oric/include/oric.h` | The core's API: config (model, ROM, the Microdisc's EPROM, RAM), frame, picture lines and the colours shown, keys by matrix position (`ORIC_KEY_*`, row * 8 + column) and those down, typing, the tape, the disks, sound, status (the VIA's registers), peek |
 | `components/oric/oric_internal.h` | The machine's state (`oric_t`: CPU, VIA, RAM, ROM, the frame's line, the ULA's mode register), the time constants (64-cycle lines, 312 / 264 lines, 224 picture lines), the modules' interfaces |
 | `components/oric/oric.c` | Init, reset (RAM noise, the mode register), the 6502's bus (page pointers; page 3 and $9800-$BFFF writes through callbacks), the VIA's wiring (the AY's bus, PB3, the printer's ACK, the IRQ), the frame loop, NMI, status |
 | `components/oric/via.c`, `via.h` | The 6522, from esp32cbm's (the 1541's; the user's own MIT code): ports with their control lines, timer 1 (one-shot / free running, PB7), timer 2, IFR/IER; timers lazy (`via_update()` counts up to the CPU's cycle; the CPU's run ends at the next underflow through `m6502_lower_until()`) |
@@ -112,7 +112,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/wd1793.c` | Its WD1793 and drives: Type I-IV commands in real time (steps, the head's load, searches, bytes 32 us apart, worked out when the CPU looks), MFM_DISK images in memory, written tracks back to their files |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
 | `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
-| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM, the Microdisc's EPROM), the setup's Model, Tape and Microdisc rows, the drives (the tape, disks A: and B:, blank ones, the disks' offer), disk writes flushed, status rows, console `k`/`K`/`T`/`N`/`W` |
+| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM, the Microdisc's EPROM), the setup's Model, Tape and Microdisc rows, the drives (the tape, disks A: and B:, blank ones, the disks' offer), disk writes flushed, the web page's card, console `k`/`K`/`T`/`N`/`W` |
 | `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
 | `main/rom_store.c` | The ROMs: a slot of `oric_roms` (mapped, copied, unmapped), the SD card's `oric/roms` over it |
 | `main/settings.c` | NVS `oric`: the model, fast tapes, the Microdisc |
@@ -346,13 +346,25 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   registers, text/hires, 50/60 Hz, the tape's position, motor, playing,
   the Microdisc (on/off, its control register, the WD1793's command and
   status, track, sector, drive and side, busy).
-- **Web page's card** (`status()`): System, ROM, Screen (mode, 50/60 Hz),
-  Sound (the AY's channels: tone frequency, noise, volume or envelope),
-  VIA (timer 1's period, its interrupt), Keyboard (CAPS), Cassette (the
-  motor, playing at 2400 or 300 baud, fast or real time, a failed save),
-  Microdisc (the WD1793's last command, track, sector, status, the drive
-  and side, motor, what $C000-$FFFF holds, sectors read and written) or
-  Expansions (none). The detailed card: `TODO.md`.
+- **Web page's card** (`status()`, the state now; the reply ~2-2.6 KB of
+  8 KB): System (the IRQ lines asserted, interrupts masked, the
+  Microdisc), ROM (BASIC, the EPROM, what $C000-$FFFF holds now), Memory
+  (page 3; BASIC's program, variables, arrays and free bytes from its
+  zero-page pointers $9A-$A7, the same in 1.0 and 1.1; "not set up" when
+  they don't make sense, e.g. a DOS in charge), Screen (mode, the
+  character sets' addresses, 50/60 Hz), Colours (the colours the latest
+  picture shows as swatches, inverse applied: `oric_screen_usage()`;
+  flashing cells, double height, the alternate set), Sound (the AY's
+  channels, the noise's and the envelope's rates, port A), VIA (T1, T2,
+  IER and IFR by name, port A and the AY's bus from the PCR, port B's
+  keyboard row), Keyboard (the keys down now: `oric_keys_down()`, CAPS),
+  Cassette, Microdisc (the WD1793's last command by name, its status bits
+  decoded as Type I's or the others', the drive, side, motor, IRQ, what
+  $C000-$FFFF holds, sectors read and written) or Expansions. The drives:
+  A: and B: with their free space for Sedoric disks (`oric_disk_sector()`
+  reads track 20 sector 2, its bitmap: $FF, $00, the free sectors, the
+  files, tracks, sectors a track, ..., the tracks with $80 for two sides;
+  other DOSes no bar).
 
 ## Lessons (each one cost a debugging session)
 
@@ -511,6 +523,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   works or the game runs, core 0 4-14%. Left on the card: a clean
   `sedoric3.dsk` and `demomagx.dsk` (the test disks deleted); the
   Microdisc switched off again.
+- **The web page's card** (2026-11-19, the Tab5 and the MaTouch, from
+  `/api/status`): BASIC's program and free bytes (an empty one: "no BASIC
+  program"; Sedoric's menu program, 808 bytes), HIRES with PAPER 4 showing
+  black, blue and white (the text rows' black on white), keys held through
+  the console ("LEFT SHIFT A"), the Microdisc's rows with Sedoric, A:'s
+  free space (2304 of 365568 bytes: the 9 sectors its DIR shows).
 - **On the MaTouch** (2026-11-19, over its UART): the setup's rows (the
   Microdisc's too), BASIC's "Ready", typed lines; Cobra at once (core 1
   42-46%, core 0 10-14%); CSAVE onto a blank tape made by the web API (36

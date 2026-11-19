@@ -3,8 +3,8 @@
 In order. A finished item goes into CLAUDE.md (what it is, how it was
 checked) and leaves this list. The notes (`docs/oric-hardware.md`) have
 the hardware for each; the section numbers below are theirs. (The core to
-"Ready", the host build, the board side on the Tab5, tapes and the
-Microdisc: done 2026-11-19, CLAUDE.md.)
+"Ready", the host build, the board side on both boards, tapes, the
+Microdisc and the web page's card: done 2026-11-19, CLAUDE.md.)
 
 1. **The board side's rest**: the sound on both boards' speakers by ear
    (PING, ZAP, a key click; only the host's recordings were measured); a
@@ -13,13 +13,7 @@ Microdisc: done 2026-11-19, CLAUDE.md.)
    (CLAUDE.md, Testing): if it comes back, catch the reset reason (the
    ROM's line at 115200 on the UART, or the panic on the native USB port;
    esp32emu could log `esp_reset_reason()` at boot for every machine).
-2. **The web page in detail** (as the siblings' machine cards): system,
-   ROM, memory (MAP, what the Microdisc pages in), the ULA's mode
-   (text/hires, 50/60 Hz, screen address), the VIA (timers, IFR/IER,
-   ports), the AY's registers and channels, keyboard, tape motor, the
-   WD1793's registers and the drives (a row already: its command, track,
-   sector, status, paging).
-3. **Original software**: finish the download (`~/Development/oric-dl/`:
+2. **Original software**: finish the download (`~/Development/oric-dl/`:
    oric-soft.bedroomlan.org's ~730 files, its TAPES section fetched on
    2026-11-19 (206 archives, 348 TAP files in `tapes/`; Axayac's failed),
    its DISKS section (31 archives, 29 MFM_DISK images in `disks/`), 15
@@ -35,7 +29,7 @@ Microdisc: done 2026-11-19, CLAUDE.md.)
    Stratsed's boot, and the Euphoric .BAT files beside four of them start
    it with `-t`, the Telestrat: another machine, out of scope unless the
    user wants it. Fix what fails.
-4. **The Oric-1**: BASIC 1.0's ROM (it already boots on the host:
+3. **The Oric-1**: BASIC 1.0's ROM (it already boots on the host:
    `ORIC_MODEL=1`), its own key table, CAPS and tape routines (the
    typing's CAPS test and RETURN wait read 1.1's $020C and $EB78; the tape
    traps are 1.1's only, so 1.0 loads in real time and at 2400 baud: its
@@ -43,7 +37,7 @@ Microdisc: done 2026-11-19, CLAUDE.md.)
    to find and trap), its system variables in the status; the model row in
    the setup; the Microdisc with 1.0 (its EPROM knows both ROMs: Sedoric
    on an Oric-1).
-5. **GitHub polish**: the repository (`github.com/rlucencic/esp32oric`)
+4. **GitHub polish**: the repository (`github.com/rlucencic/esp32oric`)
    is private since 2026-11-19: public when the user wants it, with README
    screenshots (the boards' pictures, status lines cut), and then in the
    siblings' lists (esp32emu's README and the siblings' READMEs: not

@@ -330,4 +330,21 @@ void oric_get_status(oric_status_t *s)
     psg_get_regs(s->ay);
     s->microdisc = oric.disk_rom != NULL;
     s->disk_control = microdisc_control();
+    s->irq = (uint8_t)oric.cpu.irq;
+    const via_t *v = &oric.via;
+    s->via.ora = v->ora;
+    s->via.orb = v->orb;
+    s->via.ddra = v->ddra;
+    s->via.ddrb = v->ddrb;
+    s->via.acr = v->acr;
+    s->via.pcr = v->pcr;
+    s->via.ifr = v->ifr;
+    s->via.ier = v->ier;
+    s->via.t1 = (uint16_t)v->t1;
+    s->via.t2 = v->t2;
+}
+
+uint8_t oric_peek(uint16_t addr)
+{
+    return m6502_peek(&oric.cpu, addr);
 }

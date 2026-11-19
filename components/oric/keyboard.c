@@ -217,3 +217,11 @@ void oric_keyboard_frame(void)
         s_pos++;
     }
 }
+
+/* The keys down now, a row's columns a byte (the board's and typed ones) */
+void oric_keys_down(uint8_t rows[8])
+{
+    for (int r = 0; r < 8; r++) {
+        rows[r] = s_matrix[r] | s_typed[r];
+    }
+}
