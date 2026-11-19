@@ -3,19 +3,15 @@
 In order. A finished item goes into CLAUDE.md (what it is, how it was
 checked) and leaves this list. The notes (`docs/oric-hardware.md`) have
 the hardware for each; the section numbers below are theirs. (The core to
-"Ready" and the host build: done 2026-11-19, CLAUDE.md.)
+"Ready", the host build and the board side on the Tab5: done 2026-11-19,
+CLAUDE.md.)
 
-1. **The board side** (`main/`, as esp32electron's): `main.c`
-   (`emu_machine_t`: memory, start, setup rows (model Atmos/Oric-1,
-   Microdisc on/off), status, console `k`/`K`/`T`/`N` for NMI), `keymap.c`
-   (HID usages by position: FUNCT, the cursor keys, DEL, ESC, CTRL),
-   `rom_store.c` (partition `oric_roms` at 0x810000, the SD card's
-   `oric/roms`), `settings.c` (NVS `oric`); `CMakeLists.txt` (both
-   targets), `sdkconfig.defaults` (hostname `oric-atmos`), `partitions.csv`;
-   the sound through the runtime's ring (31250 Hz). Build both boards,
-   flash, check the prompt, typing, sound and speed (core 1's load).
-   Add the project to `~/Development/esp32emu.code-workspace` and to the
-   siblings' lists (esp32emu's README and the siblings' READMEs).
+1. **The board side's rest**: flash the MaTouch (its build is clean; it
+   wasn't connected on 2026-11-19) and check the prompt, typing, sound and
+   core 1's load there; the sound on both boards' speakers by ear (PING,
+   ZAP, a key click; only the host's recordings were measured); a
+   Bluetooth or USB keyboard by hand (CTRL, FUNCT, Caps Lock as CTRL-T,
+   the cursor keys, F12's NMI).
 2. **Tapes** (docs 6): `.tap` files in the SD card's `oric/` folder, a
    Tape drive (setup screen, web page, NVS `oricdisks`); CLOAD/CSAVE
    through a trap of the ROM's byte routines (fast), and the bits through
@@ -47,5 +43,7 @@ the hardware for each; the section numbers below are theirs. (The core to
    status; the model row in the setup.
 7. **GitHub polish**: the repository (`github.com/rlucencic/esp32oric`)
    is private since 2026-11-19: public when the user wants it, with README
-   screenshots (the boards' pictures, status lines cut); the `sdloric`
-   sibling when it starts.
+   screenshots (the boards' pictures, status lines cut), and then in the
+   siblings' lists (esp32emu's README and the siblings' READMEs: not
+   before, they'd link to a page nobody can open); the `sdloric` sibling
+   when it starts. (`~/Development/esp32emu.code-workspace` has it.)

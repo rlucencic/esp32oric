@@ -5,10 +5,11 @@ M5Stack Tab5 (ESP32-P4): a 6502A at 1 MHz, 64 KB of RAM, the ULA's
 serial-attribute text and hires screens, a 6522 VIA, an AY-3-8912 and BASIC
 1.1, with tapes and the Oric Microdisc to follow.
 
-**Early development: the core runs on a PC, not yet on the boards.** It
-boots BASIC 1.1 to "Ready" and runs typed programs, the text and hires
-screens with their serial attributes and the AY's sound
-(`make -C components/oric/host run`). The hardware research is in
+**Early development.** On the Tab5 (and in a PC build, `make -C
+components/oric/host run`) it boots BASIC 1.1 (or the Oric-1's 1.0) to
+"Ready" and runs typed programs, the text and hires screens with their
+serial attributes and the AY's sound; tapes and the Microdisc are still to
+come, and the MaTouch is built but not yet tried. The hardware research is in
 `docs/oric-hardware.md`; `TODO.md` has the plan, in order; `CLAUDE.md` the
 state of things.
 

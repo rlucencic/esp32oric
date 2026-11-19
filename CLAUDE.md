@@ -10,12 +10,14 @@ required (esp32emu's plan). Both boards, as the Electron and the QL. The
 plan: esp32emu's CLAUDE.md, "To do" (the Oric Atmos's entry). **What's
 next: `TODO.md`**.
 
-**State (2026-11-19): the core runs on the host; no board build yet.**
-Done: the hardware research (`docs/oric-hardware.md`), the ROMs (local,
-not in git), the core (`components/oric`: BASIC 1.1 to "Ready", typing,
-text and hires with every attribute, the AY's sound, NMI, 50/60 Hz; BASIC
-1.0 boots too) and its host build (`make -C components/oric/host run`,
-`check`). Next, the board side: `TODO.md`.
+**State (2026-11-19): runs on the Tab5; the MaTouch builds, not tried
+yet.** Done: the hardware research (`docs/oric-hardware.md`), the ROMs
+(local, not in git), the core (`components/oric`: BASIC 1.1 to "Ready",
+typing, text and hires with every attribute, the AY's sound, NMI, 50/60
+Hz; BASIC 1.0 for the Oric-1), its host build (`make -C
+components/oric/host run`, `check`) and the board side (`main/`: the
+setup's Model row, keyboards, ROMs from flash or the card, status, console;
+checked on the Tab5). Next: `TODO.md`.
 
 The board side (tasks, LCD, touch, SD, WiFi, BLE, setup screen, web page,
 console) and the 6502 core (`m6502`) are the shared library in
@@ -34,8 +36,8 @@ certain and what is not).
 
 ## Build, flash, debug (the Linux PC)
 
-As esp32electron (copy its `CMakeLists.txt`, `sdkconfig.defaults`,
-`partitions.csv`, `main/` when they're written, `TODO.md` 1):
+As esp32electron's (its `CMakeLists.txt`, `sdkconfig.defaults` without
+the slow pages, `partitions.csv` and `main/` were the start):
 
 ```sh
 # Tab5 (/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_60:55:F9:FB:03:03-if00)
@@ -48,14 +50,21 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 
 - The two builds share `managed_components/`: build one after the other,
   never both at once.
-- Planned, as the siblings: `flash` writes the ROMs into 64 KB slots of
-  `oric_roms` (0x810000): `basic11b.rom` slot 0, `basic10.rom` slot 1,
-  `microdis.rom` slot 2; a file of the same name in the SD card's
-  `oric/roms` overrides one (`roms/README.md`: where they come from). NVS
-  namespace `oric` (model, Microdisc on/off), drives `oricdisks`. mDNS
-  `oric-atmos.local`. The SD card's `oric/` folder: `.tap` tapes and
-  `.dsk` (MFM_DISK) disks. The boards are shared with the other projects:
-  after another one, a full `flash`.
+- `flash` writes the ROMs into 64 KB slots of `oric_roms` (0x810000):
+  `basic11b.rom` slot 0, `basic10.rom` slot 1, `microdis.rom` slot 2; a
+  file of the same name in the SD card's `oric/roms` overrides one (any
+  case; `roms/README.md`: where they come from). NVS namespace `oric`
+  (`model`: 0 Atmos, 1 Oric-1; the Microdisc's to come), drives
+  `oricdisks`. mDNS `oric-atmos.local`. The SD card's `oric/` folder:
+  `.tap` tapes (listed and uploaded, they don't play yet), later `.dsk`
+  (MFM_DISK) disks. The boards are shared with the other projects: after
+  another one, a full `flash`.
+- **The Tab5 after flashing (2026-11-19)**: the RTS hard reset at the
+  flash's end (and `emu_console.py reset`) left it in the ROM's download
+  mode ("boot:0x204 ... waiting for download", nothing on the console).
+  `python -m esptool --chip esp32p4 -p PORT --after watchdog_reset
+  read_mac` (in the IDF's environment) boots the app; ~10 s later the
+  console answers.
 - The MaTouch: its UART port, not native USB (the speaker's lines); opening
   that port resets the board.
 - `../esp32emu/tools/emu_console.py PORT log N | lcd F.png | send "cmd" |
@@ -74,7 +83,10 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
 | `components/oric/host/` | The host build (`Makefile`, `host_main.c`): see Testing |
-| `main/` | The board side (empty: `TODO.md` 1) |
+| `main/main.c` | The Oric as an `emu_machine_t`: memory (ROM and RAM in PSRAM), start (the model's ROM), the setup's Model row (saved by `every_second()`), the Tape drive (`.tap` names only, for now), status rows, console `k`/`K`/`T`/`N` |
+| `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
+| `main/rom_store.c` | The ROMs: `oric_roms` mapped once at power-on, the SD card's `oric/roms` over it |
+| `main/settings.c` | NVS `oric`: the model |
 | `docs/oric-hardware.md` | The hardware research: memory map, VIA, AY, ULA and display, keyboard and NMI, cassette and TAP, Microdisc and MFM_DISK, reset; sources |
 | `roms/` | The ROMs (not in git; `roms/README.md` says where they come from) |
 
@@ -181,6 +193,29 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   SHIFT when off; small letters plain; control codes as CTRL + letter,
   `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL).
 
+## The board side (`main/`)
+
+- **Setup screen** (Tab5): Model at y 269 (Atmos x 440, Oric-1 x 795),
+  Start/Restart `t 1065 637`, the setup corner `t 1265 15 2600` (held).
+  The status lines show the WiFi name and IP: keep them out of published
+  images.
+- **Picture**: 240 x 224 at `view_width` 800 (1.33 : 1, as a TV frames the
+  Oric's picture), nearest pixel: 960 x 720 on the Tab5 (4 columns a
+  pixel, 3 or 4 rows a line). Circles come out wide, as on a TV.
+- **Keyboards** (`keymap.c`): by position; Tab and Esc (and `) ESC, Alt
+  FUNCT, Ctrl CTRL, the Shifts LEFT/RIGHT SHIFT; Backspace and Delete DEL,
+  the cursor keys the Oric's; Caps Lock, keypad * and + typed through
+  `oric_type()` (CTRL-T, SHIFT-8, SHIFT-=: the modifier a frame early); F12
+  and Pause the NMI button.
+- **Console**: `k <n>` taps matrix key n (row * 8 + column, decimal),
+  `K <n> <0|1>`, `T <text>` (`\n` RETURN; ~6 frames a character), `N` the
+  NMI button. `i` (the tool's `info`): frames, registers, text/hires,
+  50/60 Hz.
+- **Web page's card** (`status()`): System, ROM, Screen (mode, 50/60 Hz),
+  Sound (the AY's channels: tone frequency, noise, volume or envelope),
+  VIA (timer 1's period, its interrupt), Keyboard (CAPS), Cassette (the
+  motor), Expansions. The detailed card: `TODO.md`.
+
 ## Lessons (each one cost a debugging session)
 
 - **Page 2 noise typed a phantom key**: power-on RAM noise everywhere put
@@ -190,6 +225,16 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 - **CAPS is a mask, not a flag**: $020C is $FF with CAPS on, $7F off (ANDed
   onto the key table's bit 7, the small letters: ROM $F50C). Taken as
   "non-zero = on", typed capitals came out small with CAPS off.
+- **The setup screen while running is on a PSRAM stack: no flash work
+  there** (the Tab5 rebooted twice, 2026-11-19): esp32emu's supervisor runs
+  it (and `set()`, and `start()` on a Restart) with its stack in PSRAM, and
+  anything that turns the caches off asserts there
+  (`esp_task_stack_is_sane_cache_disabled()`): `settings_save()`'s NVS
+  write from `set()`, and `esp_partition_mmap()` of the Oric-1's ROM slot,
+  never mapped before. The model is saved by `every_second()` (the stats
+  task, internal stack); the ROM partition is mapped once in
+  `reserve_memory()` (the main task) and kept. The siblings' `set()`s write
+  NVS directly: esp32emu's CLAUDE.md, To do.
 - **A typed key and its SHIFT together can miss each other**: the ROM's
   full scan takes ~4.5 ms, columns 7 down to 0; a key in column 2 pressed
   after the scan passed the modifiers' column 4 is read unshifted (':'
@@ -225,6 +270,15 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   1.4 s), key clicks; NMI's warm start keeps the program; a 60 Hz attribute
   at $BFDF makes frames 16,896 cycles. BASIC 1.0 (`ORIC_MODEL=1`): its
   banner, "47870 BYTES FREE", PRINT 2+2.
+- **On the Tab5** (2026-11-19): the setup screen (Model, Sound, Tapes),
+  Start: the banner, "Ready" and the cursor; a program typed through the
+  console (`T`), LIST and RUN; HIRES with PAPER 4, INK 3 and two CIRCLEs;
+  `N` (TEXT again, the program kept); the Model switched three times with
+  Restart (Atmos and Oric-1, "47870 BYTES FREE" and PRINT 3*3 from ROM slot
+  1), the choice still there after a reboot. 50 frames a second, 100%
+  speed, core 1 16-17% busy, core 0 4-10%. Not checked: the sound on the
+  speaker (by ear), Bluetooth and USB keyboards by hand, the MaTouch (not
+  connected; its build is clean).
 
 ## Where things are (outside git, this PC)
 
