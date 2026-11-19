@@ -72,5 +72,7 @@ the hardware for each; the section numbers below are theirs.
    `smoke.py`), fix what fails.
 8. **The Oric-1**: BASIC 1.0's ROM, its own key table and tape routines;
    the model row in the setup.
-9. **GitHub polish**: README screenshots (the boards' pictures, status
-   lines cut), topics, the `sdloric` sibling when it starts.
+9. **GitHub polish**: the repository (`github.com/rlucencic/esp32oric`)
+   is private since 2026-11-19: public when the user wants it, with README
+   screenshots (the boards' pictures, status lines cut); the `sdloric`
+   sibling when it starts.
