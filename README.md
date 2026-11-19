@@ -8,7 +8,8 @@ serial-attribute text and hires screens, a 6522 VIA, an AY-3-8912, BASIC
 **Early development.** On the Tab5 (and in a PC build, `make -C
 components/oric/host run`) it boots BASIC 1.1 (or the Oric-1's 1.0) to
 "Ready" and runs typed programs, the text and hires screens with their
-serial attributes and the AY's sound. Tapes are `.TAP` files on the SD
+serial attributes and the AY's sound (the language versions of 1.1, uk,
+fr, de, es and se, work as drop-in ROMs too). Tapes are `.TAP` files on the SD
 card: CLOAD and CSAVE at once (BASIC 1.1's tape routines trapped), or in
 real time through the VIA as on the real machine; games with loaders of
 their own get the tape in real time. The Microdisc (switched on in the

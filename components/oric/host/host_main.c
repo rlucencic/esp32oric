@@ -413,7 +413,7 @@ int main(int argc, char **argv)
     for (int i = 0; i < ORIC_DRIVES; i++) {
         oric_disk_eject(i);             /* (writes the changed tracks) */
     }
-    printf("after %u frames: PC %04X\n", frames, oric.cpu.pc);
+    printf("after %u frames: PC %04X%s\n", frames, oric.cpu.pc, oric_halted() ? " (halted: a JAM)" : "");
     write_ppm(out);
     return 0;
 }

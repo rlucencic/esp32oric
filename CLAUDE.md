@@ -116,7 +116,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `main/keymap.c` | HID usages to the Atmos's keys by position (a US layout's, its shifted symbols too) |
 | `main/rom_store.c` | The ROMs: a slot of `oric_roms` (mapped, copied, unmapped), the SD card's `oric/roms` over it |
 | `main/settings.c` | NVS `oric`: the model, fast tapes, the Microdisc |
-| `tools/tapesmoke.py` | Every TAP in a folder through the host build (CLOAD"", fast or real time): a summary and a contact sheet |
+| `tools/tapesmoke.py` | Every TAP in a folder through the host build (CLOAD"", fast or real time, keys typed): a summary (errors on the screen, a JAM, still or dark pictures), contact sheets of pictures over time |
 | `tools/loadertap.py` | A test tape whose loader reads CB1 itself (the ROM's routines copied to RAM) |
 | `tools/mkdisk.py` | A test disk the EPROM boots: its SYSTEM.DOS (a small 6502 assembler inside) runs the WD1793's commands and leaves their results at $0800 and on the screen; `--check` the tracks it wrote |
 | `tools/disksmoke.py` | Every MFM_DISK image in a folder booted through the host build with a Microdisc: commands, errors, pictures, a contact sheet |
@@ -233,7 +233,12 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   by row), typed text (`oric_type()`: a key held 3 frames, then 2 up; its
   SHIFT or CTRL a frame before it; capitals plain while CAPS is on, with
   SHIFT when off; small letters plain; control codes as CTRL + letter,
-  `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL). After a RETURN
+  `\x14` CTRL-T toggles CAPS; `\n`/`\r` RETURN, ESC, DEL). The characters'
+  keys come from the ROM's own key table (64 codes, then 64 with SHIFT, at
+  column x 8 + row; $FF78 in 1.1 and its uk, fr, de, es, se versions, $FF70
+  in 1.0; taken where RETURN and SPACE sit in their places): the language
+  ROMs' layouts type right (AZERTY, QWERTZ, uk's `"` and `@` swapped); a ROM
+  without one gets 1.1's keys. After a RETURN
   the next key waits until BASIC waits for one (1.1: the PC in its key
   loop, `$C5E8`/`$023B`/`$EB78`, at a frame's end, 3-250 frames; other ROMs
   25 frames): see the lessons.
@@ -463,7 +468,8 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   before), `ORIC_DUMP=<addr>:<len>;...`, `ORIC_DASM=<addr>:<n>`.
   Tapes: `ORIC_TAPE=<file>` (CSAVE writes onto it: a copy),
   `ORIC_NEWTAPE=<file>` (a blank one made and put in), `ORIC_REALTIME=1`,
-  `ORIC_TAPE_LOG=1` (the tape's state each second); loads and saves are
+  `ORIC_TAPE_LOG=1` (the tape's state each second); the last line says
+  "(halted: a JAM)" when the CPU stopped on one; loads and saves are
   logged (`tape: loaded "NAME" ($0501-$051A)`). With a tape in, `$E4`,
   `$E6` and `$E7` read as `$FF` to the disassembler (`m6502_peek()`: the
   bus callback's pages).
@@ -500,6 +506,23 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   one byte, the real time's started one, and tapes still loading at the
   cut-off); the contact sheets show title screens and menus. Not checked
   here: whether each program then runs (`TODO.md`, original software).
+- **Original software** (2026-11-19; `~/Development/oric-dl/FINDINGS.md`,
+  `analysis/tapes.tsv`, `analysis/disks.tsv`): all 349 tapes of
+  oric-soft's TAPES section (Axayac's from the Wayback Machine, the TAP
+  itself named .zip) through `tapesmoke.py` with no keys, 6000 frames, the
+  pictures looked at: 211 run (their title, menu or game), 126 are data
+  their programs load (Sokobac's levels, Pac-Man's parts), 7 wait for
+  files in other TAPs or earlier parts, 2 have no autorun, 3 are broken
+  images (Star Probe's line chain, Strip 21's autorun byte on data,
+  Othello's end overwritten by a leader: a real Oric fails the same way).
+  Twelve action games started with Space and watched 12000 frames: they
+  play. A typed Space at a title asking for a number gives `?TYPE MISMATCH
+  ERROR` (Jump Fox, Space Crystals), as on an Oric. The disks: 22 of 29
+  boot (above); 7 are Telestrat disks, 1 the Jasmin's FT-DOS. The ROMS
+  section: 1.1's uk, fr, de, es, se versions and Pravetz 8D boot, and
+  their tapes load at once (the tape routines byte for byte 1.1's). No
+  fault of the emulator's found; typing follows the ROM's key table since.
+  oric.org's files need an account there: not fetched.
 - **The Microdisc** (2026-11-19, host): `tools/disksmoke.py` over
   oric-soft.bedroomlan.org's DISKS section (29 MFM_DISK images, all
   geometry 1): 22 boot without a controller error (Sedoric 2 and 3 to
@@ -540,7 +563,13 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   session) it reset ~3 s after every boot, just after WiFi connected, 18
   times in 100 s, the internal RAM then 14 KB at its lowest; six sessions
   since, with the same steps, booted once each. Not explained: the
-  panics go to the native USB port and no reset reason was caught. Left
+  panics go to the native USB port and no reset reason was caught. Seen
+  again once (a session after an app-flash): one extra boot ~2.7 s in,
+  right after "net: connected" and "time set", then it ran. Five boots
+  read at 115200 (the ROM's `rst:` lines) showed only the POWERON of the
+  port's opening. The board is powered from its UART port alone since the
+  native port was unplugged; a supply dip as WiFi starts transmitting is
+  a suspect, not shown. Left
   on its card: `cobra.tap` (in the tape drive) and a clean
   `sedoric3.dsk`; the Microdisc off.
 - **Tapes on the Tab5** (2026-11-19): the setup's Tape row (Fast / Real

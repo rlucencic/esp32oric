@@ -1,9 +1,9 @@
 # Oric ROM images
 
-Put the ROM images here (not part of this repository). `idf.py flash` will
-write them into 64 KB slots of the `oric_roms` flash partition (to come, as
-in the siblings), and a file of the same name in the SD card's `oric/roms`
-folder will override the flashed one.
+Put the ROM images here (not part of this repository). `idf.py flash`
+writes them into 64 KB slots of the `oric_roms` flash partition, and a file
+of the same name in the SD card's `oric/roms` folder overrides the flashed
+one.
 
 | File | What | Size | CRC32 |
 |---|---|---|---|
@@ -16,3 +16,9 @@ Microdisc device's set: archive.org's "MAME 0.264 ROMs (non-merged)" item)
 and in https://oric-soft.bedroomlan.org/files/; the two sources' files are
 identical (docs/oric-hardware.md 1.7). The ROMs are Tangerine's and Oric
 International's copyright; they are not distributed here.
+
+oric-soft's ROMS section also has BASIC 1.1's language versions: 1.1uk
+(52b5ed9b), fr (02bd82f5), de (07a5a667), es (2539bb8d) and se (c593bee6),
+and the Bulgarian Pravetz 8D's (PRAVETZD f8d23821, PRAVETZT 58079502). Any
+of them as `basic11b.rom` boots to Ready with its own keyboard layout,
+and tapes load at once (checked on the host, 2026-11-19).

@@ -7,7 +7,9 @@
  * Keys come from other tasks (the board's keyboards: atomic bits) and from
  * typed text (the emulation task: a key held for HOLD_FRAMES, its SHIFT or
  * CTRL from a frame before, then all let go for GAP_FRAMES; the ROM scans
- * every 30 ms, so a key is seen twice and its release once). Letters follow
+ * every 30 ms, so a key is seen twice and its release once). A character's
+ * key comes from the ROM's own key table (build_map(): the language ROMs'
+ * layouts, 1.0's at $FF70), 1.1's keys for a ROM without one. Letters follow
  * BASIC's CAPS ($020C, on at reset): with it on a capital is the plain key
  * and a small letter isn't typed as such (the ROM makes every letter a
  * capital then: CTRL-T turns CAPS off). After a RETURN the next key waits
@@ -40,8 +42,51 @@ static int s_lead;                      /* 1: its modifier went down a frame bef
 static typed_t s_char;
 static int s_after_return;              /* frames since a typed RETURN was let go (0: none) */
 
-/* Every character the Atmos's keys make (its key caps: docs 5.1) */
-static bool for_char(char ch, typed_t *t)
+/* The ROM's key table (docs 5.1): 64 codes unshifted, then 64 with SHIFT,
+ * at column * 8 + row; the small letters have bit 7 set (CAPS's mask),
+ * the shifted half their capitals. BASIC 1.1 and its language versions
+ * (uk, fr, de, es, se: their own layouts) have it at $FF78, 1.0 at $FF70;
+ * a table is taken where RETURN ($0D) and SPACE sit in their places
+ */
+static const uint8_t *rom_key_table(void)
+{
+    static const uint16_t at[] = { 0xFF78, 0xFF70 };
+    if (oric.rom == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0; i < sizeof(at) / sizeof(at[0]); i++) {
+        const uint8_t *t = oric.rom + (at[i] - 0xC000);
+        if (t[5 * 8 + 7] == 0x0D && t[0 * 8 + 4] == ' ') {
+            return t;
+        }
+    }
+    return NULL;
+}
+
+/* Characters to keys: bit 7 known, bit 6 with SHIFT, bits 0-5 the key */
+static uint8_t s_map[128];
+
+static void build_map(void)
+{
+    memset(s_map, 0, sizeof(s_map));
+    const uint8_t *t = rom_key_table();
+    if (t == NULL) {
+        return;                         /* (the fixed table: for_char()) */
+    }
+    for (int half = 1; half >= 0; half--) {         /* the unshifted codes win */
+        for (int i = 63; i >= 0; i--) {
+            uint8_t c = t[half * 64 + i] & 0x7F;
+            if (c != 0) {
+                s_map[c] = (uint8_t)(0x80 | (half ? 0x40 : 0) | ((i % 8) * 8 + i / 8));
+            }
+        }
+    }
+}
+
+/* Every character the Atmos's keys make (its key caps: docs 5.1): ROMs
+ * whose key table isn't found
+ */
+static bool fixed_char(char ch, typed_t *t)
 {
     static const struct {
         char c;
@@ -133,8 +178,38 @@ void oric_key(int key, bool down)
     }
 }
 
+/* A character's key and modifier, by the ROM's table when it has one */
+static bool for_char(char ch, typed_t *t)
+{
+    if (!(s_map['a'] & 0x80)) {
+        return fixed_char(ch, t);
+    }
+    unsigned c = (unsigned char)ch;
+    bool caps = (oric.ram[0x020C] & 0x80) != 0;     /* $FF on, $7F off */
+    if (c >= 'A' && c <= 'Z' && (s_map[c + 32] & 0x80)) {
+        t->key = s_map[c + 32] & 0x3F;
+        t->how = caps ? PLAIN : SHIFT;
+        return true;
+    }
+    if (c == '\n' || c == '\r') {
+        c = 0x0D;
+    }
+    if (c < 128 && (s_map[c] & 0x80)) {
+        t->key = s_map[c] & 0x3F;
+        t->how = (s_map[c] & 0x40) ? SHIFT : PLAIN;
+        return true;
+    }
+    if (c >= 1 && c <= 26 && (s_map['a' + c - 1] & 0x80)) {     /* CTRL and the letter (CTRL-T: CAPS) */
+        t->key = s_map['a' + c - 1] & 0x3F;
+        t->how = CTRL;
+        return true;
+    }
+    return false;
+}
+
 void oric_keyboard_reset(void)
 {
+    build_map();
     memset(s_typed, 0, sizeof(s_typed));
     s_pos = s_len = s_t = 0;
     s_after_return = 0;

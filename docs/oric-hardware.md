@@ -688,6 +688,14 @@ FUNCT (row 5, column 4) is the Atmos's extra key [AUG p74, p77 ("row 5,
 ... column 4 ... #EF"); MAME `orica`] [confirmed]. "-" marks an empty
 position.
 
+The table: 128 bytes at $FF78 in 1.1, $FF70 in 1.0, the 64 codes without
+SHIFT then the 64 with it, at column x 8 + row; the small letters with bit
+7 set (CAPS's mask, $020C), their capitals in the second half [derived].
+The language versions of 1.1 (uk, fr, de, es, se, from oric-soft's ROMS)
+differ from it only there, in the banner and in the characters at
+$FF78-$FFF7 (AZERTY, QWERTZ, uk's `"` and `@` swapped): their tape
+routines are 1.1's byte for byte [derived, 2026-11-19].
+
 Codes the ROM produces [ROM $FF78 table] [derived]: cursor left $08,
 right $09, down $0A, up $0B, DEL $7F, ESC $1B, RETURN $0D; letters with
 CAPS (default on, $020C = $FF) upper case; SHIFT selects the second half
@@ -803,7 +811,13 @@ Type and autorun values: [ROM $E7FE-$E802, $E82F-$E831; TAPTAP; CLK
 `Tape.cpp`; FILE] [confirmed]; AUG p73 gives them schematically ("Basic=0,
 Machine Code=1", "AUTO IF 1 ELSE 0"). On load, machine code with autorun
 jumps to the start address, BASIC with autorun runs [ROM $E8D6-$E8E5]
-[derived]. The speed flag is $024D: 0 fast, non-zero slow [ROM
+[derived]; any non-zero byte counts (`LDA $02AD / BEQ`), in 1.0 too (its
+header in zero page, $63 the type and $64 the autorun, `JMP ($005F)` at
+$E7D0) [derived]. The 349 TAP files of oric-soft's TAPES section hold
+$00, $C7, $80, $04 and $01 there (2026-11-19); Strip 21's data file with
+$80 is jumped into and crashes on any Oric (`~/Development/oric-dl/
+FINDINGS.md`). A machine-code file without autorun ends a 1.0 CLOAD at
+Ready (`JMP $C98B`), where 1.1 returns to the statement after it. The speed flag is $024D: 0 fast, non-zero slow [ROM
 $E7B2-$E7B4, $E807-$E80B; CLK] [confirmed].
 
 ### 6.4 How the ROM reads [ROM $E71C-$E759, $E6C9-$E71B] [derived]
