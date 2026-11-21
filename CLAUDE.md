@@ -43,7 +43,7 @@ As esp32electron's (its `CMakeLists.txt`, `sdkconfig.defaults` without
 the slow pages, `partitions.csv` and `main/` were the start):
 
 ```sh
-# Tab5 (/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_60:55:F9:FB:03:03-if00)
+# Tab5 (/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_*)
 bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; \
   idf.py -B build-tab5 -DIDF_TARGET=esp32p4 -DSDKCONFIG=$PWD/build-tab5/sdkconfig build'
 # ... -p PORT flash (writes the roms/ too), app-flash for the app only
@@ -107,7 +107,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 | `components/oric/via.c`, `via.h` | The 6522, from esp32cbm's (the 1541's; the user's own MIT code): ports with their control lines, timer 1 (one-shot / free running, PB7), timer 2, IFR/IER; timers lazy (`via_update()` counts up to the CPU's cycle; the CPU's run ends at the next underflow through `m6502_lower_until()`) |
 | `components/oric/psg.c` | The AY-3-8912: registers through BDIR/BC1, port A (the keyboard's columns), tones, noise, envelope, the mono mix through a capacitor into the sound ring (31250 Hz) |
 | `components/oric/keyboard.c` | The matrix (PB3), keys from other tasks, typed text (`oric_type()`) |
-| `components/oric/tape.c` | The cassette: TAP files indexed, played as CB1 edges while the motor runs and something reads them, BASIC 1.1's tape routines trapped (CLOAD and CSAVE at once), saves onto the tape's end |
+| `components/oric/tape.c` | The cassette: TAP files indexed, played as CB1 edges while the motor runs and something reads them, BASIC 1.0 and 1.1 tape routines trapped (CLOAD and CSAVE at once), saves onto the tape's end |
 | `components/oric/microdisc.c` | The Microdisc: page 3's $0310-$031B, the control register, paging (BASIC, the EPROM, the overlay RAM), INTRQ to the IRQ |
 | `components/oric/wd1793.c` | Its WD1793 and drives: Type I-IV commands in real time (steps, the head's load, searches, bytes 32 us apart, worked out when the CPU looks), MFM_DISK images in memory, written tracks back to their files |
 | `components/oric/video.c` | The ULA: each line decoded as it starts into cells (pattern, ink, paper, inverse, flash), three frames for the presenter, decoding skipped while nothing shown changes; `oric_render_line_rgb565()` |
@@ -239,9 +239,9 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   in 1.0; taken where RETURN and SPACE sit in their places): the language
   ROMs' layouts type right (AZERTY, QWERTZ, uk's `"` and `@` swapped); a ROM
   without one gets 1.1's keys. After a RETURN
-  the next key waits until BASIC waits for one (1.1: the PC in its key
-  loop, `$C5E8`/`$023B`/`$EB78`, at a frame's end, 3-250 frames; other ROMs
-  25 frames): see the lessons.
+  the next key waits until BASIC waits for one. The PC at a frame's end
+  identifies BASIC 1.1's `$C5E8`/`$023B`/`$EB78` loop or 1.0's
+  `$C5F8`/`$E905` loop after 3-250 frames. Other ROMs wait 25 frames.
 - **The tape** (`tape.c`, docs 6): a TAP file read whole into PSRAM (4 MB
   at most) and indexed (each file's leader, `$24`, header, name, data; a
   file the scan can't follow is searched for again at `16 16 16 24`).
@@ -249,7 +249,8 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   `run_to()`; `tape_sync()` before every VIA access): each bit a cycle from
   rising edge to rising edge, 1 = 210 + 210 us, 0 = 210 + 418 (the ROM's
   writer, timer 1's N + 2); 300 baud (1 = eight short cycles, 0 = four of
-  418 + 418) when BASIC 1.1's `$024D` says so as the motor starts. A byte:
+  418 + 418) when BASIC's speed byte (`$024D` in 1.1, `$67` in 1.0) is
+  set as the motor starts. A byte:
   three 1s, the 0 start bit, 8 data bits from bit 0, parity (1 for an even
   count of ones). 64 more `$16`s in front of each file's leader (TAP files
   have 3 or 4; the ROM's sync wants a bit-synchronised one and three whole
@@ -258,8 +259,8 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   edge). It plays while the motor runs and something reads it: IFR read 500
   times in a frame or CB1's interrupt enabled starts it (fast: two such
   frames, real time: one), two frames under 50 reads stop it (TAP files
-  lost the real tapes' gaps). *Fast* (the default; BASIC 1.1 only, its
-  routines' first bytes checked): `$E4`, `$E6`, `$E7` read through the bus
+  lost the real tapes' gaps). *Fast* (the default for BASIC 1.0 and 1.1,
+  the routines' first bytes checked): the trap pages read through the bus
   callback while the tape stands still (`tape_rom_read()`: the ROM's bytes
   always), and a read of a routine's first byte stops the run after that
   instruction; if the PC then is where it leads (a JSR's target with the
@@ -270,7 +271,10 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   far as it goes), and with any tape in the save side: the leader `$E75A`
   (three `$16`s), the byte writer `$E65E`, the data loop `$E62E`, onto the
   tape's end, into the file when the motor stops (or 50 frames after the
-  last). A routine it can't serve (the tape out, a name not on it) goes on
+  last). The addresses above are for BASIC 1.1. In 1.0 the corresponding
+  entries are `$E696`, `$E630`, `$E4EB`, `$E6BA`, `$E5C6`, and
+  `$E5A7`, with the file's bounds in `$5F` and `$61`.
+  A routine it can't serve (the tape out, a name not on it) goes on
   in the ROM, and the load traps rest until the motor starts again (the
   ROM reads on in real time). *Real time*: the load traps off; the sync
   only watched (a search starting at the tape's end rewinds it once). The
@@ -454,6 +458,47 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 
 ## Testing
 
+- **Oric-1 BASIC 1.0 (2026-11-21)**. The Model row selects the Oric-1
+  ROM. CTRL-T uses the same CAPS byte as the Atmos. The typing queue
+  waits at BASIC 1.0's own line editor after RETURN. The web status
+  shows the initial string boundary at `$BFFF` and HIMEM at `$9F00`.
+  After CLOAD it can show the program even when the variable and array
+  pointers still need initialization by BASIC. The host's
+  `make -C components/oric/host check check-oric1` passed. The Oric-1
+  loaded a named TAP in fast mode and in real time at 2400 and 300 baud.
+  A copied loader running from RAM could read the next file in both
+  modes. The WD1793 test image passed, and Sedoric 3 could list its
+  directory, save a program, and load and run it again.
+  Both the Tab5 and MaTouch booted BASIC 1.0 from the Model row. They
+  toggled CAPS, saved and loaded a 37-byte TAP in fast mode, and
+  loaded it again at 300 baud. The Microdisc booted Sedoric 3 and DIR
+  listed 52 files. The original model and media were restored.
+- **MaTouch reset logging (2026-11-21)**. A local shared runtime build logged
+  `esp_reset_reason()` by name and number as soon as the application
+  console is ready, before Wi-Fi starts. On the MaTouch the line goes
+  to the 921600-baud UART. After an app-only flash, five serial-triggered
+  boots reported `power-on (1)` and each connected to Wi-Fi once. The
+  final 100-second capture showed one startup and the Oric running at
+  50 fps. The intermittent extra reset did not recur, so its cause
+  remains open.
+- **Bluetooth keyboard (2026-11-21, Tab5)**. Paired a Logitech MX Keys S
+  and tested physical key presses in Atmos BASIC. The web status showed
+  press and release for CTRL, Alt as FUNCT, and all four cursor keys.
+  Caps Lock switched BASIC's CAPS off and back on. F12 brought HIRES back
+  to TEXT at Ready, and LIST confirmed that the BASIC program survived.
+  A separate host check through `keymap_hid_key()` verified both Ctrl and
+  Alt mappings, the arrows, CAPS, and the F12 warm start.
+- **Onboard speakers (2026-11-21, Tab5 and MaTouch)**. Both boards ran
+  Atmos BASIC at 50 Hz and logged speaker startup at 31,250 Hz. A laptop
+  microphone recorded each board separately at a temporary 55% speaker
+  setting. Both recordings showed a 625 Hz tone from `SOUND 1,100,12`,
+  attenuation and recovery with the speaker mute toggled, a 2,604 Hz
+  `PING`, the descending `ZAP` sweep, and a roughly 2 kHz click each
+  time A or DEL was tapped through the serial console. Mute brought the
+  measured 625 Hz component down about 22 dB on both recordings. The
+  original speaker and microphone settings were restored. WAVs are in
+  `~/Development/oric-dl/analysis/speakers/`, with the first half-second
+  removed to skip the microphone's startup transient.
 - **Host build**: `make -C components/oric/host run` (ROM `roms/
   basic11b.rom`, 300 frames, `build/screen.ppm`), or `build/oric_host
   <rom> [frames] [out.ppm]` (~0.1 ms a frame). Environment: `ORIC_MODEL=1`
@@ -601,9 +646,7 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
   the workarounds gone (the save straight from `set()`): Model changes
   with Restart and the volume changed while running, no reboot, the setup
   screen using ~5.5 KB of the main task's 16 KB. 50 frames a second, 100%
-  speed, core 1 16-17% busy, core 0 4-10%. Not checked: the sound on the
-  speaker (by ear), Bluetooth and USB keyboards by hand, the MaTouch (not
-  connected; its build is clean).
+  speed, core 1 16-17% busy, core 0 4-10%.
 
 ## Where things are (outside git, this PC)
 

@@ -484,8 +484,17 @@ static void basic_text(char *text, size_t len, const oric_status_t *s)
         p[i] = oric_peek(0x9A + 2 * i) | (oric_peek(0x9B + 2 * i) << 8);
     }
     uint16_t prog = p[0], vars = p[1], arrays = p[2], end = p[3], strings = p[4], himem = p[6];
-    if (!(prog >= 0x0400 && prog <= vars && vars <= arrays && arrays <= end && end <= strings &&
-          strings <= himem && himem <= 0xC000)) {
+    /* BASIC 1.0 starts with the string boundary at the top of RAM, above
+     * its configured HIMEM. String collection resets it to HIMEM.
+     */
+    bool oric1 = s->model == ORIC_1;
+    bool allocation_ready = vars <= arrays && arrays <= end && end <= strings && end <= himem;
+    /* BASIC 1.0 CLOAD sets the end of the program but leaves the variable
+     * and array pointers alone until RUN clears them.
+     */
+    bool program_only = oric1 && end < vars;
+    if (!(prog >= 0x0400 && prog <= vars && vars <= strings && vars <= himem &&
+          himem <= 0xC000 && strings <= (oric1 ? 0xC000 : himem) && (allocation_ready || program_only))) {
         snprintf(text, len, "BASIC's pointers not set up%s", s->microdisc ? " (a DOS in charge?)" : "");
         return;
     }
@@ -493,8 +502,18 @@ static void basic_text(char *text, size_t len, const oric_status_t *s)
     if (vars - prog > 2) {              /* (an empty one: its end's two zeros) */
         snprintf(program, sizeof(program), "BASIC's program #%04X-#%04X (%u bytes)", prog, vars - 1, vars - prog);
     }
-    snprintf(text, len, "%s, variables %u bytes, arrays %u; %u bytes free below HIMEM #%04X", program,
-             arrays - vars, end - arrays, strings - end, himem);
+    if (program_only) {
+        snprintf(text, len, "%s; variable and array pointers not set up", program);
+        return;
+    }
+    char limit[48];
+    if (strings > himem) {
+        snprintf(limit, sizeof(limit), "#%04X (HIMEM #%04X)", strings, himem);
+    } else {
+        snprintf(limit, sizeof(limit), "HIMEM #%04X", himem);
+    }
+    snprintf(text, len, "%s, variables %u bytes, arrays %u; %u bytes free below %s", program,
+             arrays - vars, end - arrays, strings - end, limit);
 }
 
 static void status(emu_json_t *j, int section)
@@ -580,7 +599,7 @@ static void status(emu_json_t *j, int section)
     emu_json_row(j, "Keyboard", text);
     snprintf(text, sizeof(text), "Motor %s%s; %s%s", s.motor ? "on" : "off",
              t.playing ? (t.slow ? ", playing at 300 baud" : ", playing at 2400 baud") : "",
-             !t.fast ? "loads in real time" : t.traps ? "CLOAD and CSAVE at once" : "real time (not BASIC 1.1)",
+             !t.fast ? "loads in real time" : t.traps ? "CLOAD and CSAVE at once" : "real time (unrecognised tape routines)",
              t.write_failed ? "; a CSAVE couldn't be written to the card" : "");
     emu_json_row(j, "Cassette", text);
     if (s.microdisc) {

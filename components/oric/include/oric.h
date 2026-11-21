@@ -84,7 +84,7 @@ bool oric_type(const char *text);       /* \n is RETURN; false while still typin
 /* ---- Cassette: TAP files ----
  *
  * The tape plays on CB1 while the motor runs. Fast (the default, BASIC
- * 1.1): CLOAD and CSAVE through the ROM's tape routines at once, a CSAVE
+ * 1.0 and 1.1): CLOAD and CSAVE through the ROM's tape routines at once, a CSAVE
  * onto the tape's end (the file written when the motor stops); a loader of
  * its own gets the tape in real time. Insert, eject, create and rewind not
  * while oric_run_frame() runs; oric_tape_fast() and the status from any
@@ -99,7 +99,7 @@ void oric_tape_fast(bool fast);             /* false: loads in real time too */
 
 typedef struct {
     bool inserted, fast;
-    bool traps;                 /* the ROM has 1.1's tape routines (fast works) */
+    bool traps;                 /* the ROM's tape routines are recognised (fast works) */
     bool motor, playing, slow;  /* the relay; the tape on CB1 (300 baud) */
     uint32_t pos, size;         /* the head's offset in the file, its size */
     int file, files;            /* the file at the head (0 ..; files: past the last) */

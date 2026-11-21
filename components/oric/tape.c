@@ -5,8 +5,8 @@
  *
  * Played: while the motor (PB6) runs, the bytes go to CB1 as the ROM writes
  * them. 2400 baud: a cycle a bit, rising edge to rising edge, 1 a short one
- * (210 + 210 us), 0 a long one (210 + 418); 300 baud when BASIC 1.1's speed
- * flag ($024D) is set as the motor starts (1 eight short cycles, 0 four of
+ * (210 + 210 us), 0 a long one (210 + 418); 300 baud when BASIC's speed flag
+ * ($67 on 1.0, $024D on 1.1) is set as the motor starts (1 eight short cycles, 0 four of
  * 418 + 418). Each byte: three 1s (the stop bits before it), a start bit 0,
  * eight data bits from bit 0, the parity bit (1 when the data has an even
  * number of 1s). A file's leader gets LEADER_EXTRA more $16s (the ROM's
@@ -14,14 +14,15 @@
  * three or four in all), and GAP_BITS 1s follow its name (the loader
  * prints "Found" and compares names meanwhile).
  *
- * Fast (the default): BASIC 1.1's tape routines trapped. Their ROM pages
- * ($E4, $E6, $E7) are read through the bus callback (tape_rom_read(): the
+ * Fast (the default): trap the tape routines of BASIC 1.0 and 1.1. Their
+ * ROM pages are read through the bus callback (tape_rom_read(): the
  * ROM's bytes, always: Poopy's loader copies these routines into RAM and
  * runs the copy); a read of a routine's first byte stops the CPU after
  * that instruction, and if the PC is then where it leads (a JSR's target,
  * the return address on the stack) the routine was entered: tape_trap()
  * does its work and its RTS (a JSR undone first). A read as data leads
- * elsewhere and changes nothing. Loading:
+ * elsewhere and changes nothing. The addresses below are for BASIC 1.1.
+ * Loading:
  * the sync ($E735: on to the next file's $24, from the start once when the
  * tape has run out), the byte reader ($E6C9), the data loop ($E4E0: the
  * whole file at once). Saving, with any tape in: the leader ($E75A: three
@@ -64,37 +65,51 @@
 #define QUIET_FRAMES    2
 #define SAVE_IDLE       50              /* frames without saving: the save goes into the file */
 
-/* ---- BASIC 1.1's tape routines ---- */
+/* ---- The BASIC ROMs' tape routines ---- */
 
 enum { TRAP_SYNC, TRAP_BYTE, TRAP_DATA, TRAP_LEADER, TRAP_WBYTE, TRAP_WDATA, TRAPS };
 
-static const struct {
+typedef struct {
     uint16_t addr;
-    uint8_t code[4];                    /* its first bytes: the ROM is 1.1's */
-    uint16_t after;                     /* the PC after its first instruction */
-    bool jsr;                           /* ... a JSR: its return on the stack */
-    bool load;                          /* fast loading only */
-} s_traps[TRAPS] = {
-    [TRAP_SYNC] = { 0xE735, { 0x20, 0xFC, 0xE6, 0x66 }, 0xE6FC, true, true },     /* JSR $E6FC; ROR $2F */
-    [TRAP_BYTE] = { 0xE6C9, { 0x98, 0x48, 0x8A, 0x48 }, 0xE6CA, false, true },    /* TYA; PHA; TXA; PHA */
-    [TRAP_DATA] = { 0xE4E0, { 0xAD, 0xA9, 0x02, 0xAC }, 0xE4E3, false, true },    /* LDA $02A9; LDY $02AA */
-    [TRAP_LEADER] = { 0xE75A, { 0xA2, 0x02, 0xA0, 0x03 }, 0xE75C, false, false }, /* LDX #2; LDY #3 */
-    [TRAP_WBYTE] = { 0xE65E, { 0x85, 0x2F, 0x8A, 0x48 }, 0xE660, false, false },  /* STA $2F; TXA; PHA */
-    [TRAP_WDATA] = { 0xE62E, { 0xAD, 0xA9, 0x02, 0xAC }, 0xE631, false, false },  /* LDA $02A9; LDY $02AA */
+    uint8_t code[4];                    /* signature at the entry point */
+    uint16_t after;                     /* the PC after the first instruction */
+} trap_t;
+
+typedef struct {
+    uint16_t speed, start, end;
+    uint16_t verify, errors;            /* zero if the ROM has no CLOAD verification */
+    trap_t traps[TRAPS];
+} tape_rom_t;
+
+static const tape_rom_t s_roms[] = {
+    {
+        .speed = 0x024D, .start = 0x02A9, .end = 0x02AB, .verify = 0x025B, .errors = 0x025C,
+        .traps = {
+            [TRAP_SYNC] = { 0xE735, { 0x20, 0xFC, 0xE6, 0x66 }, 0xE6FC },
+            [TRAP_BYTE] = { 0xE6C9, { 0x98, 0x48, 0x8A, 0x48 }, 0xE6CA },
+            [TRAP_DATA] = { 0xE4E0, { 0xAD, 0xA9, 0x02, 0xAC }, 0xE4E3 },
+            [TRAP_LEADER] = { 0xE75A, { 0xA2, 0x02, 0xA0, 0x03 }, 0xE75C },
+            [TRAP_WBYTE] = { 0xE65E, { 0x85, 0x2F, 0x8A, 0x48 }, 0xE660 },
+            [TRAP_WDATA] = { 0xE62E, { 0xAD, 0xA9, 0x02, 0xAC }, 0xE631 },
+        },
+    },
+    {
+        .speed = 0x67, .start = 0x5F, .end = 0x61,
+        .traps = {
+            [TRAP_SYNC] = { 0xE696, { 0x20, 0x5E, 0xE6, 0x66 }, 0xE65E },
+            [TRAP_BYTE] = { 0xE630, { 0x98, 0x48, 0x8A, 0x48 }, 0xE631 },
+            [TRAP_DATA] = { 0xE4EB, { 0xA5, 0x5F, 0xA4, 0x60 }, 0xE4ED },
+            [TRAP_LEADER] = { 0xE6BA, { 0xA2, 0x02, 0xA0, 0x03 }, 0xE6BC },
+            [TRAP_WBYTE] = { 0xE5C6, { 0x85, 0x2F, 0x8A, 0x48 }, 0xE5C8 },
+            [TRAP_WDATA] = { 0xE5A7, { 0xA5, 0x5F, 0xA4, 0x60 }, 0xE5A9 },
+        },
+    },
 };
 
-static const uint8_t s_trap_pages[] = { 0xE4, 0xE6, 0xE7 };
-#define TRAP_PAGES  (sizeof(s_trap_pages))
-
+static const uint8_t s_trap_pages[] = { 0xE4, 0xE5, 0xE6, 0xE7 };
 static int s_hit = -1;                  /* the trap whose first byte was read in this run */
 
-/* BASIC 1.1's addresses */
 enum {
-    A_SPEED = 0x024D,                   /* 0 fast, else slow */
-    A_VERIFY = 0x025B,                  /* CLOAD ...,V */
-    A_ERRORS = 0x025C,                  /* verify's count (16 bits) */
-    A_START = 0x02A9,                   /* the header: start, end (inclusive) */
-    A_END = 0x02AB,
     A_PTR = 0x33,                       /* the data loops' pointer */
     A_BYTE = 0x2F,                      /* the byte being read or written */
 };
@@ -117,7 +132,7 @@ static struct {
     uint32_t pos;                       /* the next byte the head gets to */
     tfile_t *file;                      /* the index (kept once made: the status reads it) */
     int files;
-    bool basic11;                       /* the ROM's routines are 1.1's: traps */
+    const tape_rom_t *rom;              /* recognised cassette routines */
     bool fast, want_fast;
     bool armed_load, armed_save;
     bool motor;
@@ -442,31 +457,35 @@ static void player_to_byte(void)
 
 /* ---- The ROM's pages with the traps in ---- */
 
-static bool rom_is_basic11(void)
+static const tape_rom_t *find_tape_rom(void)
 {
-    for (int t = 0; t < TRAPS; t++) {
-        if (memcmp(oric.rom + (s_traps[t].addr - 0xC000), s_traps[t].code, 4) != 0) {
-            return false;
+    for (size_t i = 0; i < sizeof(s_roms) / sizeof(s_roms[0]); i++) {
+        const tape_rom_t *rom = &s_roms[i];
+        int t;
+        for (t = 0; t < TRAPS; t++) {
+            const trap_t *entry = &rom->traps[t];
+            if (memcmp(oric.rom + (entry->addr - 0xC000), entry->code, sizeof(entry->code)) != 0) {
+                break;
+            }
+        }
+        if (t == TRAPS) {
+            return rom;
         }
     }
-    return true;
+    return NULL;
 }
 
-/* (the sync in real time too: watched) */
+/* In real time the sync is watched, and CSAVE still writes to the TAP. */
 static bool armed(int t)
 {
-    return s_traps[t].load && t != TRAP_SYNC ? s.armed_load : s.armed_save;
+    return t == TRAP_BYTE || t == TRAP_DATA ? s.armed_load : s.armed_save;
 }
 
 void tape_map(void)
 {
     s.fast = s.want_fast;
-    if (oric.rom == NULL) {
-        return;                         /* not started */
-    }
-    s.basic11 = rom_is_basic11();
-    s.armed_load = s.basic11 && s.inserted && s.fast;
-    s.armed_save = s.basic11 && s.inserted;
+    s.armed_save = s.rom != NULL && s.inserted;
+    s.armed_load = s.armed_save && s.fast;
     map_pages();
 }
 
@@ -478,11 +497,11 @@ static void map_pages(void)
     if (oric.rom == NULL || !oric.basic_in) {
         return;                         /* the Microdisc's EPROM or the overlay RAM there */
     }
-    for (size_t i = 0; i < TRAP_PAGES; i++) {
+    for (size_t i = 0; i < sizeof(s_trap_pages); i++) {
         uint8_t page = s_trap_pages[i];
         bool any = false;
-        for (int t = 0; t < TRAPS && !p.playing; t++) {
-            any |= armed(t) && (s_traps[t].addr >> 8) == page;
+        for (int t = 0; t < TRAPS && s.armed_save && !p.playing; t++) {
+            any |= armed(t) && (s.rom->traps[t].addr >> 8) == page;
         }
         oric.cpu.rd[page] = any ? NULL : (uint8_t *)oric.rom + (page - 0xC0) * 256;
     }
@@ -494,7 +513,7 @@ static void map_pages(void)
 uint8_t tape_rom_read(uint16_t a)
 {
     for (int t = 0; t < TRAPS; t++) {
-        if (a == s_traps[t].addr && armed(t)) {
+        if (armed(t) && a == s.rom->traps[t].addr) {
             s_hit = t;
             m6502_lower_until(&oric.cpu, oric.cpu.cycles);
             break;
@@ -536,6 +555,16 @@ static void flags(uint8_t nz, int carry)
     }
 }
 
+static void basic10_data_result(uint16_t next)
+{
+    /* The final pointer comparison leaves A zero and preserves X.
+     * Incrementing the pointer sets N and Z from the last byte written.
+     */
+    oric.cpu.a = 0;
+    uint8_t low = next;
+    flags(low ? low : next >> 8, 1);
+}
+
 static void log_file(const char *what, uint32_t pos)
 {
     int i = file_at(pos ? pos - 1 : 0);
@@ -558,7 +587,7 @@ static bool trap_sync(void)
     if (f < 0) {
         return false;
     }
-    oric.cpu.s += 2;                    /* its JSR $E6FC undone */
+    oric.cpu.s += 2;                    /* undo the sync's first JSR */
     s.pos = s.file[f].marker;
     oric.cpu.a = 0x16;
     oric.cpu.x = 0;
@@ -589,8 +618,8 @@ static bool trap_byte_read(void)
 static bool trap_data(void)
 {
     m6502_t *c = &oric.cpu;
-    uint16_t addr = word(A_START), last = word(A_END);
-    bool verify = oric.ram[A_VERIFY] != 0;
+    uint16_t addr = word(s.rom->start), last = word(s.rom->end);
+    bool verify = s.rom->verify && oric.ram[s.rom->verify] != 0;
     uint8_t v = 0;
     bool done;
     do {
@@ -604,19 +633,23 @@ static bool trap_data(void)
         if (!verify) {
             oric_write(addr, v);
         } else if (peek(addr) != v) {
-            uint16_t e = word(A_ERRORS) + 1;
-            oric.ram[A_ERRORS] = e;
-            oric.ram[A_ERRORS + 1] = e >> 8;
+            uint16_t e = word(s.rom->errors) + 1;
+            oric.ram[s.rom->errors] = e;
+            oric.ram[s.rom->errors + 1] = e >> 8;
         }
         done = addr >= last;
         addr++;
     } while (!done);
     oric.ram[A_PTR] = addr;
     oric.ram[A_PTR + 1] = addr >> 8;
-    c->a = v;
-    c->x = oric.ram[A_VERIFY];
     c->y = 0;
-    flags(c->x, 1);
+    if (s.rom->verify) {
+        c->a = v;
+        c->x = oric.ram[s.rom->verify];
+        flags(c->x, 1);
+    } else {
+        basic10_data_result(addr);
+    }
     s.loaded++;
     s.wrapped = false;
     log_file(verify ? "verified" : "loaded", s.pos);
@@ -651,7 +684,7 @@ static bool trap_byte_write(void)
 static bool trap_data_write(void)
 {
     m6502_t *c = &oric.cpu;
-    uint16_t addr = word(A_START), last = word(A_END);
+    uint16_t addr = word(s.rom->start), last = word(s.rom->end);
     bool done;
     do {
         record(peek(addr));
@@ -661,9 +694,13 @@ static bool trap_data_write(void)
     oric.ram[A_PTR] = addr;
     oric.ram[A_PTR + 1] = addr >> 8;
     c->y = 0;
-    flags(0, 1);
+    if (s.rom->verify) {
+        flags(0, 1);
+    } else {
+        basic10_data_result(addr);
+    }
     s.saved++;
-    ORIC_LOGI("tape: saved $%04X-$%04X", word(A_START), last);
+    ORIC_LOGI("tape: saved $%04X-$%04X", word(s.rom->start), last);
     rts();
     return true;
 }
@@ -679,12 +716,12 @@ bool tape_trap(void)
     }
     s_hit = -1;
     m6502_t *c = &oric.cpu;
-    if (!armed(t) || c->pc != s_traps[t].after) {
+    if (!armed(t) || c->pc != s.rom->traps[t].after) {
         return false;                   /* read as data, or not run yet */
     }
-    if (s_traps[t].jsr) {
+    if (t == TRAP_SYNC) {
         uint16_t ret = oric.ram[0x100 | (uint8_t)(c->s + 1)] | (oric.ram[0x100 | (uint8_t)(c->s + 2)] << 8);
-        if (ret != s_traps[t].addr + 2) {
+        if (ret != s.rom->traps[t].addr + 2) {
             return false;
         }
     }
@@ -700,7 +737,7 @@ bool tape_trap(void)
         }
         return false;
     }
-    if (s_traps[t].load) {
+    if (t <= TRAP_DATA) {
         if (s.declined) {
             return false;
         }
@@ -731,7 +768,7 @@ void tape_motor(bool on)
     }
     s.wrapped = false;
     s.declined = false;
-    p.slow = s.basic11 && oric.ram[A_SPEED] != 0;
+    p.slow = s.rom && oric.ram[s.rom->speed] != 0;
     s.busy_frames = 0;
 }
 
@@ -775,6 +812,8 @@ void tape_reset(void)
     s.wrapped = false;
     s.declined = false;
     s.busy_frames = 0;
+    s_hit = -1;
+    s.rom = find_tape_rom();
 }
 
 void tape_nmi(void)
@@ -869,7 +908,7 @@ void oric_tape_status(oric_tape_status_t *st)
     memset(st, 0, sizeof(*st));
     st->inserted = s.inserted;
     st->fast = s.want_fast;
-    st->traps = s.basic11;
+    st->traps = s.rom != NULL;
     st->motor = s.motor;
     st->playing = p.playing;
     st->slow = p.slow;

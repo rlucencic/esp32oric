@@ -14,9 +14,9 @@
  * and a small letter isn't typed as such (the ROM makes every letter a
  * capital then: CTRL-T turns CAPS off). After a RETURN the next key waits
  * until BASIC waits for one: it empties the key buffer ($02DF) on its way
- * back to "Ready" ($C993), and a key typed while a command still ran was
- * lost. BASIC 1.1's wait is its key loop's PC at a frame's end (RET_MIN to
- * RET_MAX frames after); other ROMs get RET_OTHER frames.
+ * back to "Ready", and a key typed while a command still ran was lost.
+ * For BASIC 1.0 and 1.1, check the line editor and its key reader at a
+ * frame's end. Other ROMs get RET_OTHER frames.
  */
 #include <string.h>
 #include "oric_internal.h"
@@ -41,6 +41,12 @@ static int s_t;                         /* frames into the character being typed
 static int s_lead;                      /* 1: its modifier went down a frame before it */
 static typed_t s_char;
 static int s_after_return;              /* frames since a typed RETURN was let go (0: none) */
+
+typedef struct {
+    uint16_t editor, reader, vector;
+} basic_input_t;
+
+static const basic_input_t *s_input;
 
 /* The ROM's key table (docs 5.1): 64 codes unshifted, then 64 with SHIFT,
  * at column * 8 + row; the small letters have bit 7 set (CAPS's mask),
@@ -207,27 +213,43 @@ static bool for_char(char ch, typed_t *t)
     return false;
 }
 
+/* Both BASIC versions read the same key buffer, through different
+ * routines. BASIC 1.1 calls its reader through a page-2 vector.
+ */
+static const basic_input_t *find_basic_input(void)
+{
+    static const basic_input_t inputs[] = {
+        { 0xC5E8, 0xEB78, 0x023B },     /* 1.1 */
+        { 0xC5F8, 0xE905, 0 },          /* 1.0 */
+    };
+    static const uint8_t code[] = { 0xAD, 0xDF, 0x02, 0x10 };
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        if (memcmp(oric.rom + (inputs[i].reader - 0xC000), code, sizeof(code)) == 0) {
+            return &inputs[i];
+        }
+    }
+    return NULL;
+}
+
 void oric_keyboard_reset(void)
 {
     build_map();
+    s_input = find_basic_input();
     memset(s_typed, 0, sizeof(s_typed));
     s_pos = s_len = s_t = 0;
     s_after_return = 0;
 }
 
-/* BASIC 1.1 waits for a key: its line editor's loop ($C5E8: JSR $023B,
- * BPL back) and the routine there ($EB78: LDA $02DF, BPL to its RTS)
- */
 static bool basic_waits(void)
 {
-    static const uint8_t loop[] = { 0xAD, 0xDF, 0x02, 0x10 };    /* $EB78 */
-    if (memcmp(oric.rom + (0xEB78 - 0xC000), loop, sizeof(loop)) != 0) {
+    if (!s_input) {
         return s_after_return >= RET_OTHER;
     }
     uint16_t pc = oric.cpu.pc;
-    return (s_after_return >= RET_MIN && ((pc >= 0xC5E8 && pc <= 0xC5EB) || (pc >= 0xEB78 && pc <= 0xEB88) ||
-                                          (pc >= 0x023B && pc <= 0x023D))) ||
-           s_after_return >= RET_MAX;
+    bool editor = pc >= s_input->editor && pc <= s_input->editor + 3;
+    bool reader = pc >= s_input->reader && pc <= s_input->reader + 0x10;
+    bool vector = s_input->vector && pc >= s_input->vector && pc <= s_input->vector + 2;
+    return s_after_return >= RET_MAX || (s_after_return >= RET_MIN && (editor || reader || vector));
 }
 
 bool oric_type(const char *text)

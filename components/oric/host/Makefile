@@ -8,6 +8,7 @@ BUILD     := build
 CFLAGS    := -O2 -g -Wall -Wextra -Wno-unused-parameter -DM6502_HOST_HOOK -DORIC_HOST_HOOK -I$(ORIC)/include -I$(ORIC) \
              -I$(M6502)/include -I$(EMUDBG)/include
 ROM       ?= $(ROOT)/roms/basic11b.rom
+ROM10     ?= $(ROOT)/roms/basic10.rom
 MDROM     ?= $(ROOT)/roms/microdis.rom
 FRAMES    ?= 300
 
@@ -68,7 +69,24 @@ check: $(BUILD)/oric_host
 	python3 -I $(ROOT)/tools/mkdisk.py --check $(BUILD)/disk.dsk > /dev/null
 	@echo "host checks passed"
 
+check-oric1: $(BUILD)/oric_host
+	ORIC_MODEL=1 ORIC_TEXT=1 ORIC_TYPE="$$(printf '150:\024|200:REM Hello, World: [1+2]\\n')" \
+	    ./$(BUILD)/oric_host $(ROM10) 600 $(BUILD)/check-oric1.ppm | grep -q "^|  REM Hello, World: \[1+2\]"
+	rm -f $(BUILD)/check-oric1.tap
+	ORIC_MODEL=1 ORIC_NEWTAPE=$(BUILD)/check-oric1.tap \
+	    ORIC_TYPE='150:10 PRINT "ORIC-1"\nCSAVE"ONE"\nCSAVE"TWO",S\n' \
+	    ./$(BUILD)/oric_host $(ROM10) 700 $(BUILD)/check-oric1.ppm > /dev/null
+	ORIC_MODEL=1 ORIC_TAPE=$(BUILD)/check-oric1.tap ORIC_TEXT=1 ORIC_TYPE='150:CLOAD"TWO"\nLIST\n' \
+	    ./$(BUILD)/oric_host $(ROM10) 550 $(BUILD)/check-oric1.ppm | grep -q '^|  10 PRINT "ORIC-1"'
+	ORIC_MODEL=1 ORIC_REALTIME=1 ORIC_TAPE=$(BUILD)/check-oric1.tap ORIC_TEXT=1 \
+	    ORIC_TYPE='150:CLOAD"TWO"\nLIST\n' \
+	    ./$(BUILD)/oric_host $(ROM10) 600 $(BUILD)/check-oric1.ppm | grep -q '^|  10 PRINT "ORIC-1"'
+	ORIC_MODEL=1 ORIC_REALTIME=1 ORIC_TAPE=$(BUILD)/check-oric1.tap ORIC_TEXT=1 \
+	    ORIC_TYPE='150:CLOAD"TWO",S\n|1000:LIST\n' \
+	    ./$(BUILD)/oric_host $(ROM10) 1300 $(BUILD)/check-oric1.ppm | grep -q '^|  10 PRINT "ORIC-1"'
+	@echo "Oric-1 host checks passed"
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: run check clean
+.PHONY: run check check-oric1 clean
