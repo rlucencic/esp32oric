@@ -458,6 +458,19 @@ bash -c '. ~/.espressif/tools/activate_idf_v5.5.6.sh >/dev/null 2>&1; idf.py bui
 
 ## Testing
 
+- **Web status before Start (2026-11-22).** The drives section requests
+  core status while the setup screen is open. Reading the CAPS byte then
+  accessed unattached RAM. The core now reports CAPS off until RAM is
+  attached. `check` exercises the pre-initialization status call, which
+  crashed on the host before the fix. The Atmos and Oric-1 host suites
+  passed after the fix. Both boards answered repeated `/api/status`
+  requests before Start, while running and while paused. CTRL-T changed
+  the reported CAPS state and restored it on each board.
+- **MaTouch reset follow-up (2026-11-22).** Three complete UART captures
+  after flashing recorded one `power-on (1)` event per boot. The final
+  run answered status requests before Start, during emulation, and while
+  paused. It reached 193 seconds of uninterrupted uptime at 50 fps.
+  The older intermittent reset loop did not recur during these checks.
 - **Oric-1 BASIC 1.0 (2026-11-21)**. The Model row selects the Oric-1
   ROM. CTRL-T uses the same CAPS byte as the Atmos. The typing queue
   waits at BASIC 1.0's own line editor after RETURN. The web status

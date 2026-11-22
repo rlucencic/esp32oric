@@ -41,6 +41,7 @@ $(BUILD)/%.o: $(EMUDBG)/%.c $(EMUDBG)/include/emudbg.h
 # time; the Microdisc's EPROM booting tools/mkdisk.py's test disk, its
 # WD1793 commands' results and the tracks they wrote
 check: $(BUILD)/oric_host
+	./$(BUILD)/oric_host --check-setup-status
 	ORIC_TEXT=1 ./$(BUILD)/oric_host $(ROM) 300 $(BUILD)/check.ppm | grep -q "37631 BYTES FREE"
 	ORIC_TEXT=1 ./$(BUILD)/oric_host $(ROM) 300 $(BUILD)/check.ppm | grep -q "^|  Ready"
 	ORIC_TEXT=1 ORIC_TYPE='150:PRINT 6*7:FOR I=1 TO 3:PRINT I;:NEXT\n' ./$(BUILD)/oric_host $(ROM) 600 $(BUILD)/check.ppm \

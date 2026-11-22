@@ -2,6 +2,7 @@
  * Host build of the Oric core, for testing on the PC:
  *
  *   oric_host <basic11b.rom> [frames] [out.ppm]
+ *   oric_host --check-setup-status
  *
  * Environment:
  *   ORIC_MODEL=1            an Oric-1 (give BASIC 1.0's ROM)
@@ -272,6 +273,15 @@ static uint8_t *load(const char *path, size_t size)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "--check-setup-status") == 0) {
+        oric_status_t status;
+        oric_get_status(&status);
+        if (status.frames || status.caps || status.motor || status.microdisc) {
+            fprintf(stderr, "unexpected machine status before initialization\n");
+            return 1;
+        }
+        return 0;
+    }
     if (argc < 2) {
         fprintf(stderr, "usage: %s <basic11b.rom> [frames] [out.ppm]\n", argv[0]);
         return 1;

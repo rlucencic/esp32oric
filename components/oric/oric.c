@@ -323,7 +323,8 @@ void oric_get_status(oric_status_t *s)
     s->model = oric.cfg.model;
     s->hires = (oric.mode & MODE_HIRES) != 0;
     s->hz50 = (oric.mode & MODE_50HZ) != 0;
-    s->caps = (oric.ram[0x020C] & 0x80) != 0;     /* $FF on, $7F off */
+    /* The setup screen can request status before RAM is attached. */
+    s->caps = oric.ram && (oric.ram[0x020C] & 0x80) != 0;     /* $FF on, $7F off */
     s->motor = oric.motor;
     s->timer1 = oric.via.t1_latch;
     s->timer1_irq = (oric.via.ier & 0x40) != 0;
