@@ -125,6 +125,10 @@ format, ULA timing and disk interface.
   MFM_DISK images. Of those, 211 tapes reached a title, menu or game
   and 22 disks booted. The [test notes](CLAUDE.md#testing) have more detail.
 
+## Roadmap
+
+See [TODO.md](TODO.md) for proposed work and how to verify it.
+
 ## Related emulators
 
 | Project | Machines |

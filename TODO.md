@@ -7,6 +7,21 @@ the hardware for each; the section numbers below are theirs. (The core to
 Microdisc, the web page's card and the original software's run: done
 2026-11-19, CLAUDE.md; `~/Development/oric-dl/FINDINGS.md`.)
 
+## Next work
+
+1. **Turn the original-software pass into a small replay suite.** Use
+   `tools/tapesmoke.py` and `tools/disksmoke.py` to select one multi-stage TAP,
+   one slow real-time tape and one writable Sedoric disk. Record checkpoints
+   for both BASIC ROMs and verify save/reopen on a scratch disk without
+   committing archive media.
+
+2. **Open and close setup while media are active.** On the MaTouch and Tab5,
+   check status JSON and CAPS before Start, while paused during tape playback
+   and during a Microdisc transfer. Verify resume completes the operation and
+   save UART reset reasons alongside the existing intermittent-reset follow-up.
+
+## Conditional follow-up
+
 1. **The MaTouch reset loop** (CLAUDE.md, Testing): if it comes back,
    keep the UART console recording at 921600 baud and look for
    `emu: reset reason:` on the next boot. For resets before the
